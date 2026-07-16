@@ -37,8 +37,8 @@ def leggi_query(query, params=None):
     with engine.connect() as conn:
         return pd.read_sql_query(text(query), conn, params=params or {})
 
-# Funzione per la finestra modale di conferma eliminazione
-@st.dialog("Conferma Eliminazione")
+# Finestra modale di conferma eliminazione CONTATTO
+@st.dialog("Conferma Eliminazione Contatto")
 def conferma_eliminazione_dialog(contatto_id, nome_completo):
     st.warning(f"Sei sicuro di voler eliminare definitivamente **{nome_completo}**?")
     st.write("Questa azione cancellerà anche tutte le attività collegate e non potrà essere annullata.")
@@ -53,10 +53,32 @@ def conferma_eliminazione_dialog(contatto_id, nome_completo):
         if st.button("Annulla", use_container_width=True):
             st.rerun()
 
-# Sidebar con la nuova suddivisione a 4 voci
+# Finestra modale di conferma eliminazione ATTIVITÀ
+@st.dialog("Conferma Eliminazione Attività")
+def conferma_eliminazione_attivita_dialog(attivita_id, descrizione_breve):
+    st.warning(f"Sei sicuro di voler eliminare l'attività: **\"{descrizione_breve}\"**?")
+    st.write("Questa azione non può essere annullata.")
+    
+    col_conferma, col_annulla = st.columns(2)
+    with col_conferma:
+        if st.button("Sì, elimina", type="primary", use_container_width=True):
+            esegui_query("DELETE FROM attivita WHERE id = :id", {"id": int(attivita_id)})
+            st.success("Attività eliminata con successo!")
+            st.rerun()
+    with col_annulla:
+        if st.button("Annulla", use_container_width=True):
+            st.rerun()
+
+# Sidebar aggiornata a 5 voci
 menu = st.sidebar.radio(
     "Navigazione", 
-    ["Riepilogo Attività", "Info e Storico Contatti", "➕ Aggiungi Contatto", "📅 Aggiungi Attività"]
+    [
+        "Riepilogo Attività", 
+        "Info e Storico Contatti", 
+        "⚙️ Gestione Attività", 
+        "➕ Aggiungi Contatto", 
+        "📅 Aggiungi Attività"
+    ]
 )
 
 # ==================== SEZIONE 1: RIEPILOGO ATTIVITÀ (FILTRATO) ====================
@@ -140,11 +162,94 @@ elif menu == "Info e Storico Contatti":
     else:
         st.info("Nessun contatto presente nel database. Vai alla sezione 'Aggiungi Contatto' per inserirne uno.")
 
-# ==================== SEZIONE 3: AGGIUNGI CONTATTO ====================
+# ==================== SEZIONE 3: GESTIONE ATTIVITÀ (MODIFICA / CANCELLAZIONE) ====================
+elif menu == "⚙️ Gestione Attività":
+    st.header("⚙️ Gestione e Modifica Attività")
+    
+    # Recuperiamo tutte le attività associate ai rispettivi contatti
+    query_all_attivita = """
+    SELECT 
+        a.id as attivita_id,
+        c.nome || ' ' || c.cognome || ' (' || COALESCE(c.azienda, '') || ')' as contatto_info,
+        a.descrizione,
+        a.data_scadenza,
+        a.stato
+    FROM attivita a
+    JOIN contatti c ON a.contatto_id = c.id
+    ORDER BY a.data_scadenza ASC
+    """
+    attivita_totali_df = leggi_query(query_all_attivita)
+    
+    if not attivita_totali_df.empty:
+        # Creiamo un'etichetta descrittiva per il selettore
+        attivita_totali_df["label_scelta"] = (
+            "[" + attivita_totali_df["stato"] + "] " + 
+            attivita_totali_df["contatto_info"] + " - " + 
+            attivita_totali_df["descrizione"].str.slice(0, 40) + "..."
+        )
+        
+        scelta_att = st.selectbox("Seleziona l'attività da modificare o eliminare:", attivita_totali_df["label_scelta"])
+        
+        if scelta_att:
+            # Estraiamo i dati dell'attività selezionata
+            dati_att = attivita_totali_df[attivita_totali_df["label_scelta"] == scelta_att].iloc[0]
+            id_att_selezionata = dati_att["attivita_id"]
+            
+            st.write("---")
+            st.subheader("📝 Modifica Dettagli")
+            
+            # Form per la modifica dell'attività selezionata
+            with st.form("modifica_attivita_form"):
+                st.write(f"**Assegnato a:** {dati_att['contatto_info']}")
+                
+                nuova_descrizione = st.text_area("Descrizione dell'attività *", value=dati_att["descrizione"])
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Converte la data in formato corretto per l'input date
+                    data_attuale_att = pd.to_datetime(dati_att["data_scadenza"]).date()
+                    nuova_data = st.date_input("Data Scadenza", data_attuale_att, format="DD/MM/YYYY")
+                with col2:
+                    stati_possibili = ["Da fare", "In corso", "Completata"]
+                    indice_stato_attuale = stati_possibili.index(dati_att["stato"])
+                    nuovo_stato = st.selectbox("Stato", stati_possibili, index=indice_stato_attuale)
+                
+                col_btn1, col_btn2 = st.columns([1, 4])
+                with col_btn1:
+                    salva_modifiche = st.form_submit_button("Salva Modifiche")
+                
+                if salva_modifiche:
+                    if nuova_descrizione.strip():
+                        query_update = """
+                        UPDATE attivita 
+                        SET descrizione = :desc, data_scadenza = :scad, stato = :stato 
+                        WHERE id = :id
+                        """
+                        esegui_query(query_update, {
+                            "desc": nuova_descrizione,
+                            "scad": nuova_data,
+                            "stato": nuovo_stato,
+                            "id": int(id_att_selezionata)
+                        })
+                        st.success("Attività aggiornata con successo!")
+                        st.rerun()
+                    else:
+                        st.error("La descrizione dell'attività non può essere vuota!")
+            
+            # Pulsante per eliminare l'attività al di fuori del form di modifica
+            st.write("---")
+            st.write("⚠️ **Zona Pericolo**")
+            if st.button("🗑️ Elimina definitivamente questa attività", type="primary"):
+                desc_breve = dati_att["descrizione"][:30] + "..." if len(dati_att["descrizione"]) > 30 else dati_att["descrizione"]
+                conferma_eliminazione_attivita_dialog(id_att_selezionata, desc_breve)
+                
+    else:
+        st.info("Nessuna attività programmata nel sistema al momento.")
+
+# ==================== SEZIONE 4: AGGIUNGI CONTATTO ====================
 elif menu == "➕ Aggiungi Contatto":
     st.header("👤 Inserimento Nuovo Contatto")
     
-    # Form legato allo stato per conservare o eliminare i dati inseriti
     with st.form("nuovo_contatto"):
         st.write("Compila i campi per salvare un nuovo contatto in anagrafica:")
         col1, col2 = st.columns(2)
@@ -180,7 +285,7 @@ elif menu == "➕ Aggiungi Contatto":
             else:
                 st.error("I campi Nome e Cognome sono obbligatori.")
 
-# ==================== SEZIONE 4: AGGIUNGI ATTIVITÀ ====================
+# ==================== SEZIONE 5: AGGIUNGI ATTIVITÀ ====================
 elif menu == "📅 Aggiungi Attività":
     st.header("📅 Pianifica Nuova Attività")
     
