@@ -10,22 +10,15 @@ DATABASE_URL="postgresql://postgres.ruwbodnfktfcppxfjkxq:MC.D0m0s3ns3@aws-0-eu-w
 # Connessione robusta al database PostgreSQL
 engine = create_engine(DATABASE_URL)
 
-st.set_page_config(page_title="Mini CRM Cloud", layout="wide")
-st.title("💼 Il mio Mini CRM Cloud")
+st.set_page_config(page_title="Domosense CRM", layout="wide")
+st.title("Domosense CRM")
 
 # Inizializzazione delle variabili di stato per la pulizia selettiva dei form
-if "input_nome" not in st.session_state:
-    st.session_state.input_nome = ""
-if "input_cognome" not in st.session_state:
-    st.session_state.input_cognome = ""
-if "input_azienda" not in st.session_state:
-    st.session_state.input_azienda = ""
-if "input_email" not in st.session_state:
-    st.session_state.input_email = ""
-if "input_telefono" not in st.session_state:
-    st.session_state.input_telefono = ""
-if "input_descrizione" not in st.session_state:
-    st.session_state.input_descrizione = ""
+if "contact_form_version" not in st.session_state:
+    st.session_state.contact_form_version = 0
+
+if "activity_form_version" not in st.session_state:
+    st.session_state.activity_form_version = 0
 
 # Funzione per eseguire query di scrittura in sicurezza
 def esegui_query(query, params=None):
@@ -75,15 +68,15 @@ menu = st.sidebar.radio(
     [
         "Riepilogo Attività", 
         "Info e Storico Contatti", 
-        "⚙️ Gestione Attività", 
-        "➕ Aggiungi Contatto", 
-        "📅 Aggiungi Attività"
+        "Gestione Attività", 
+        "Aggiungi Contatto", 
+        "Aggiungi Attività"
     ]
 )
 
 # ==================== SEZIONE 1: RIEPILOGO ATTIVITÀ (FILTRATO) ====================
 if menu == "Riepilogo Attività":
-    st.header("🔍 Riepilogo Scadenze Attività")
+    st.header("Riepilogo Scadenze Attività")
     
     # Calcolo delle date predefinite
     oggi = datetime.today()
@@ -143,11 +136,11 @@ elif menu == "Info e Storico Contatti":
             * **Telefono:** {info_contatto['telefono'] if pd.notna(info_contatto['telefono']) else 'Non specificato'}
             """)
             
-            if st.button("🗑️ Elimina questo contatto", type="primary"):
+            if st.button("Elimina questo contatto", type="primary"):
                 conferma_eliminazione_dialog(contatto_id, nome_completo)
 
             st.write("---")
-            st.write("### 📜 Storico Attività del Contatto")
+            st.write("### Storico Attività del Contatto")
             
             attivita_df = leggi_query(
                 "SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC",
@@ -163,8 +156,8 @@ elif menu == "Info e Storico Contatti":
         st.info("Nessun contatto presente nel database. Vai alla sezione 'Aggiungi Contatto' per inserirne uno.")
 
 # ==================== SEZIONE 3: GESTIONE ATTIVITÀ (MODIFICA / CANCELLAZIONE) ====================
-elif menu == "⚙️ Gestione Attività":
-    st.header("⚙️ Gestione e Modifica Attività")
+elif menu == "Gestione Attività":
+    st.header("Gestione e Modifica Attività")
     
     # Recuperiamo tutte le attività associate ai rispettivi contatti
     query_all_attivita = """
@@ -196,7 +189,7 @@ elif menu == "⚙️ Gestione Attività":
             id_att_selezionata = dati_att["attivita_id"]
             
             st.write("---")
-            st.subheader("📝 Modifica Dettagli")
+            st.subheader("Modifica Dettagli")
             
             # Form per la modifica dell'attività selezionata
             with st.form("modifica_attivita_form"):
@@ -238,8 +231,7 @@ elif menu == "⚙️ Gestione Attività":
             
             # Pulsante per eliminare l'attività al di fuori del form di modifica
             st.write("---")
-            st.write("⚠️ **Zona Pericolo**")
-            if st.button("🗑️ Elimina definitivamente questa attività", type="primary"):
+            if st.button("Elimina definitivamente questa attività", type="primary"):
                 desc_breve = dati_att["descrizione"][:30] + "..." if len(dati_att["descrizione"]) > 30 else dati_att["descrizione"]
                 conferma_eliminazione_attivita_dialog(id_att_selezionata, desc_breve)
                 
@@ -247,19 +239,19 @@ elif menu == "⚙️ Gestione Attività":
         st.info("Nessuna attività programmata nel sistema al momento.")
 
 # ==================== SEZIONE 4: AGGIUNGI CONTATTO ====================
-elif menu == "➕ Aggiungi Contatto":
-    st.header("👤 Inserimento Nuovo Contatto")
+elif menu == "Aggiungi Contatto":
+    st.header("Inserimento Nuovo Contatto")
     
-    with st.form("nuovo_contatto"):
+    with st.form(f"nuovo_contatto_{st.session_state.contact_form_version}"):
         st.write("Compila i campi per salvare un nuovo contatto in anagrafica:")
         col1, col2 = st.columns(2)
         with col1:
-            nome = st.text_input("Nome *", key="input_nome")
-            cognome = st.text_input("Cognome *", key="input_cognome")
-            azienda = st.text_input("Azienda", key="input_azienda")
+            nome = st.text_input("Nome *")
+            cognome = st.text_input("Cognome *")
+            azienda = st.text_input("Azienda")
         with col2:
-            email = st.text_input("Email", key="input_email")
-            telefono = st.text_input("Telefono", key="input_telefono")
+            email = st.text_input("Email")
+            telefono = st.text_input("Telefono")
         
         submit = st.form_submit_button("Salva in Anagrafica")
         if submit:
@@ -274,29 +266,25 @@ elif menu == "➕ Aggiungi Contatto":
                 })
                 
                 # PULIZIA CAMPI IN CASO DI SUCCESSO
-                st.session_state.input_nome = ""
-                st.session_state.input_cognome = ""
-                st.session_state.input_azienda = ""
-                st.session_state.input_email = ""
-                st.session_state.input_telefono = ""
-                
+                st.session_state.contact_form_version += 1
                 st.success(f"Contatto **{nome} {cognome}** salvato con successo!")
                 st.rerun()
+                
             else:
                 st.error("I campi Nome e Cognome sono obbligatori.")
 
 # ==================== SEZIONE 5: AGGIUNGI ATTIVITÀ ====================
-elif menu == "📅 Aggiungi Attività":
-    st.header("📅 Pianifica Nuova Attività")
+elif menu == "Aggiungi Attività":
+    st.header("Pianifica Nuova Attività")
     
     contatti_df = leggi_query("SELECT id, nome, cognome, azienda FROM contatti")
     
     if not contatti_df.empty:
         contatti_df["nominativo"] = contatti_df["nome"] + " " + contatti_df["cognome"] + " (" + contatti_df["azienda"].fillna("") + ")"
         
-        with st.form("nuova_attivita"):
+        with st.form(f"nuova_attivita_{st.session_state.activity_form_version}"):
             contatto_scelto = st.selectbox("Associa a Contatto", contatti_df["nominativo"])
-            descrizione = st.text_area("Descrizione dell'attività da fare *", key="input_descrizione")
+            descrizione = st.text_area("Descrizione dell'attività da fare *")
             data_scadenza = st.date_input("Data Scadenza", datetime.today(), format="DD/MM/YYYY")
             stato = st.selectbox("Stato", ["Da fare", "In corso", "Completata"])
             
@@ -314,8 +302,7 @@ elif menu == "📅 Aggiungi Attività":
                     })
                     
                     # PULIZIA CAMPI IN CASO DI SUCCESSO
-                    st.session_state.input_descrizione = ""
-                    
+                    st.session_state.activity_form_version += 1
                     st.success("Attività pianificata con successo!")
                     st.rerun()
                 else:
