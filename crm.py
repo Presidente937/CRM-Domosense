@@ -112,42 +112,64 @@ else:
     sotto_sezione = st.sidebar.radio("Scegli Azione:", ["🔍 Riepilogo Scadenze", "➕ Aggiungi Attività", "⚙️ Gestione Attività"])
 
 
-# ==================== LOGICA SOTTOSEZIONI (CON FILTRO DINAMICO) ====================
+# ==# ==================== LOGICA SOTTOSEZIONI (CON TABELLA ED EDITOR) ====================
 
 # 1. INFO E GESTIONE CONTATTO
 if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione Contatto":
-    st.header("👤 Scheda e Storico Contatti")
+    st.header("👤 Elenco e Gestione Contatti")
     
-    # Se la spunta è attiva, carichiamo TUTTI i contatti (anche quelli senza utente assegnato), altrimenti solo quelli personali
+    # Caricamento dei dati in base al flag globale - Ordinati di default per Cognome (ORDER BY cognome ASC)
     if mostra_tutti:
-        contatti_df = leggi_query("SELECT * FROM contatti")
+        contatti_df = leggi_query("SELECT id, nome, cognome, ruolo, azienda, provenienza_lead, email, telefono, utente_id FROM contatti ORDER BY cognome ASC")
     else:
-        contatti_df = leggi_query("SELECT * FROM contatti WHERE utente_id = :uid", {"uid": st.session_state.user_id})
+        contatti_df = leggi_query("SELECT id, nome, cognome, ruolo, azienda, provenienza_lead, email, telefono, utente_id FROM contatti WHERE utente_id = :uid ORDER BY cognome ASC", {"uid": st.session_state.user_id})
     
     if not contatti_df.empty:
-        contatti_df["nominativo"] = contatti_df["nome"] + " " + contatti_df["cognome"] + " (" + contatti_df["azienda"].fillna("") + ")"
-        selezionato = st.selectbox("Seleziona un contatto:", contatti_df["nominativo"])
+        st.write("💡 *Clicca sulla casella a sinistra di una riga per selezionare il contatto da modificare o eliminare.*")
         
-        if selezionato:
-            contatto_id = contatti_df[contatti_df["nominativo"] == selezionato]["id"].values[0]
-            info_contatto = contatti_df[contatti_df["id"] == contatto_id].iloc[0]
+        # Prepariamo il DataFrame per la visualizzazione rinominando le colonne
+        contatti_visualizzazione = contatti_df.copy()
+        contatti_visualizzazione.columns = ["ID", "Nome", "Cognome", "Ruolo", "Azienda", "Provenienza", "Email", "Telefono", "Utente ID"]
+        
+        scelta_griglia = st.dataframe(
+            contatti_visualizzazione,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",  # Ricarica la pagina appena l'utente seleziona una riga
+            selection_mode="single-row",  # Permette di selezionare un solo contatto alla volta
+            column_config={
+                "ID": None  # Nasconde completamente la colonna ID del contatto dalla vista degli utenti
+            }
+        )
+        
+        # Controlliamo se l'utente ha selezionato una riga
+        righe_selezionate = scelta_griglia.get("selection", {}).get("rows", [])
+        
+        if righe_selezionate:
+            # Recuperiamo l'indice della riga selezionata nel DataFrame originale
+            indice_selezionato = righe_selezionate[0]
+            info_contatto = contatti_df.iloc[indice_selezionato]
+            contatto_id = info_contatto["id"]
             nome_completo = f"{info_contatto['nome']} {info_contatto['cognome']}"
             
-            st.info(f"""
-            **Dettagli Anagrafica Attuali:**
-            * **Nome e Cognome:** {info_contatto['nome']} {info_contatto['cognome']}
-            * **Ruolo / Lavoro:** {info_contatto['ruolo'] if pd.notna(info_contatto['ruolo']) else 'Non specificato'}
-            * **Azienda:** {info_contatto['azienda'] if pd.notna(info_contatto['azienda']) else 'Non specificata'}
-            * **Provenienza Lead:** {info_contatto['provenienza_lead'] if pd.notna(info_contatto['provenienza_lead']) else 'Non specificata'}
-            * **Email:** {info_contatto['email'] if pd.notna(info_contatto['email']) else 'Non specificata'}
-            * **Telefono:** {info_contatto['telefono'] if pd.notna(info_contatto['telefono']) else 'Non specificato'}
-            """)
+            st.write("---")
+            st.subheader(f"⚙️ Azioni per: {nome_completo}")
             
-            with st.expander("📝 Modifica dati anagrafici o riassegna contatto"):
+            # Layout con i pulsanti di gestione sotto la tabella
+            col_btn1, col_btn2, _ = st.columns([1, 1, 4])
+            
+            with col_btn1:
+                mostra_form_modifica = st.checkbox("📝 Modifica Anagrafica", value=False, key=f"check_mod_{contatto_id}")
+            with col_btn2:
+                if st.button("🗑️ Elimina Contatto", type="primary", key=f"btn_del_{contatto_id}"):
+                    conferma_eliminazione_dialog(contatto_id, nome_completo)
+            
+            # Se la spunta di modifica è attiva, mostriamo il form precompilato
+            if mostra_form_modifica:
                 tutti_utenti = leggi_query("SELECT id, username FROM utenti")
                 dict_utenti = dict(zip(tutti_utenti['username'], tutti_utenti['id']))
                 
-                with st.form(f"modifica_contatto_{contatto_id}"):
+                with st.form(f"modifica_contatto_tabella_{contatto_id}"):
                     col_m1, col_m2 = st.columns(2)
                     with col_m1:
                         nuovo_nome = st.text_input("Nome *", value=info_contatto['nome'])
@@ -161,37 +183,36 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
                         idx_prov = OPZIONI_PROVENIENZA.index(info_contatto['provenienza_lead']) if info_contatto['provenienza_lead'] in OPZIONI_PROVENIENZA else 0
                         nuova_provenienza = st.selectbox("Provenienza Lead", OPZIONI_PROVENIENZA, index=idx_prov)
                         
-                        # Gestione sicura del vecchio contatto senza assegnatario
-                        if 'utente_id' in info_contatto and pd.notna(info_contatto['utente_id']):
+                        if pd.notna(info_contatto['utente_id']) and info_contatto['utente_id'] in tutti_utenti['id'].values:
                             utente_corrente_nome = tutti_utenti[tutti_utenti['id'] == info_contatto['utente_id']]['username'].values[0]
                             idx_utente_sel = list(dict_utenti.keys()).index(utente_corrente_nome)
                         else:
-                            idx_utente_sel = 0 # Valore di fallback
+                            idx_utente_sel = 0
                             
                         nuovo_assegnato = st.selectbox("Assegnato a Utente", list(dict_utenti.keys()), index=idx_utente_sel)
                     
-                    if st.form_submit_button("Aggiorna Contatto"):
+                    if st.form_submit_button("Salva Modifiche"):
                         if nuovo_nome.strip() and nuovo_cognome.strip():
                             esegui_query(
                                 "UPDATE contatti SET nome=:n, cognome=:c, azienda=:a, email=:e, telefono=:t, ruolo=:r, provenienza_lead=:p, utente_id=:uid WHERE id=:id",
                                 {"n": nuovo_nome, "c": nuovo_cognome, "a": nuova_azienda, "e": nuova_email, "t": nuovo_telefono, "r": nuovo_ruolo, "p": nuova_provenienza, "uid": dict_utenti[nuovo_assegnato], "id": int(contatto_id)}
                             )
-                            st.success("Contatto aggiornato!")
+                            st.success("Contatto aggiornato con successo!")
                             st.rerun()
                         else:
-                            st.error("I campi Nome e Cognome non possono essere vuoti.")
+                            st.error("I campi Nome e Cognome sono obbligatori.")
             
-            if st.button("Elimina questo contatto", type="primary"):
-                conferma_eliminazione_dialog(contatto_id, nome_completo)
-
+            # Mostra lo storico delle attività del contatto selezionato in fondo
             st.write("---")
-            st.write("### Storico Attività")
+            st.write(f"### 📋 Storico Attività per {nome_completo}")
             attivita_df = leggi_query("SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC", {"cid": int(contatto_id)})
             if not attivita_df.empty:
                 attivita_df["Scadenza"] = pd.to_datetime(attivita_df["Scadenza"]).dt.strftime('%d/%m/%Y')
                 st.dataframe(attivita_df, use_container_width=True)
             else: 
                 st.info("Nessuna attività registrata per questo contatto.")
+        else:
+            st.info("Seleziona un contatto dalla tabella sopra per vederne i dettagli, modificarlo o eliminarlo.")
     else: 
         st.info("Nessun contatto trovato con i criteri di filtro attuali.")
 
