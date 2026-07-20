@@ -6,8 +6,12 @@ from datetime import datetime, timedelta
 # CONFIGURAZIONE SUPABASE
 DATABASE_URL="postgresql://postgres.ruwbodnfktfcppxfjkxq:MC.D0m0s3ns3@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
 
-# Connessione robusta al database PostgreSQL
-engine = create_engine(DATABASE_URL)
+# Uso st.cache_resource per non ricreare il motore di connessione a ogni rerun
+@st.cache_resource
+def ottieni_engine():
+    return create_engine(DATABASE_URL)
+
+engine = ottieni_engine()
 
 st.set_page_config(page_title="Domosense CRM", layout="wide")
 
@@ -22,16 +26,53 @@ if "user_id" not in st.session_state:
     st.session_state.user_id = None
 if "username" not in st.session_state:
     st.session_state.username = ""
+# Variabili di stato per i messaggi persistenti del CRM
+if "messaggio_successo_contatto" not in st.session_state:
+    st.session_state.messaggio_successo_contatto = None
+if "messaggio_successo_attivita" not in st.session_state:
+    st.session_state.messaggio_successo_attivita = None
 
 # Funzione per eseguire query di scrittura in sicurezza
 def esegui_query(query, params=None):
     with engine.begin() as conn:
         conn.execute(text(query), params or {})
 
-# Funzione per leggere i dati
+# --- OTTIMIZZAZIONE: CACHE DATI ---
+@st.cache_data(ttl=300)
 def leggi_query(query, params=None):
     with engine.connect() as conn:
         return pd.read_sql_query(text(query), conn, params=params or {})
+
+# Finestre modali di conferma eliminazione
+@st.dialog("Conferma Eliminazione Contatto")
+def conferma_eliminazione_dialog(contatto_id, nome_completo):
+    st.warning(f"Sei sicuro di voler eliminare definitivamente **{nome_completo}**?")
+    col_conferma, col_annulla = st.columns(2)
+    with col_conferma:
+        if st.button("Sì, elimina", type="primary", use_container_width=True):
+            esegui_query("DELETE FROM contatti WHERE id = :id", {"id": int(contatto_id)})
+            st.cache_data.clear()
+            st.success("Contatto eliminato!")
+            st.rerun()
+    with col_annulla:
+        if st.button("Annulla", use_container_width=True): 
+            st.rerun()
+
+@st.dialog("Conferma Eliminazione Attività")
+def conferma_eliminazione_attivita_dialog(attivita_id, descrizione_breve):
+    st.warning(f"Sei sicuro di voler eliminare l'attività: **\"{descrizione_breve}\"**?")
+    col_conferma, col_annulla = st.columns(2)
+    with col_conferma:
+        if st.button("Sì, elimina", type="primary", use_container_width=True):
+            esegui_query("DELETE FROM attivita WHERE id = :id", {"id": int(attivita_id)})
+            st.cache_data.clear()
+            st.success("Attività eliminata!")
+            st.rerun()
+    with col_annulla:
+        if st.button("Annulla", use_container_width=True): 
+            st.rerun()
+
+OPZIONI_PROVENIENZA = ["Social", "BNI", "Fiere/Eventi in presenza"]
 
 # ==================== SCHERMATA DI LOGIN ====================
 if not st.session_state.logged_in:
@@ -44,10 +85,11 @@ if not st.session_state.logged_in:
         submit_login = st.form_submit_button("Accedi")
         
         if submit_login:
-            user_df = leggi_query(
-                "SELECT id, username FROM utenti WHERE username = :user AND password = :pass",
-                {"user": username_input.strip(), "pass": password_input.strip()}
-            )
+            with engine.connect() as conn:
+                user_df = pd.read_sql_query(
+                    text("SELECT id, username FROM utenti WHERE username = :user AND password = :pass"),
+                    conn, params={"user": username_input.strip(), "pass": password_input.strip()}
+                )
             
             if not user_df.empty:
                 st.session_state.logged_in = True
@@ -61,64 +103,39 @@ if not st.session_state.logged_in:
 
 # ==================== APPLICATIVO LOGGATO ====================
 st.title("Domosense CRM")
-st.sidebar.write(f"👤 Utente connesso: **{st.session_state.username}**")
 
-# --- NUOVA FUNZIONALITÀ: FLAG PER VISUALIZZAZIONE GLOBALE O PERSONALE ---
+st.sidebar.title("📁 Menu Principale")
+macro_sezione = st.sidebar.radio("Seleziona Area:", ["👥 Contatti", "📅 Attività"])
+st.sidebar.write("---")
+
+if macro_sezione == "👥 Contatti":
+    sotto_sezione = st.sidebar.radio("Scegli Azione:", ["ℹ️ Info e Gestione Contatto", "➕ Aggiungi Contatto"])
+    # Ripulisce il messaggio dell'attività quando ti sposti sui contatti
+    st.session_state.messaggio_successo_attivita = None
+else:
+    sotto_sezione = st.sidebar.radio("Scegli Azione:", ["🔍 Riepilogo Scadenze", "➕ Aggiungi Attività", "⚙️ Gestione Attività"])
+    # Ripulisce il messaggio del contatto quando ti sposti sulle attività
+    st.session_state.messaggio_successo_contatto = None
+
+st.sidebar.write(f"👤 Utente connesso: **{st.session_state.username}**")
 mostra_tutti = st.sidebar.checkbox("👀 Mostra i contatti di tutti gli utenti", value=False)
 
 if st.sidebar.button("Logout", type="secondary"):
     st.session_state.logged_in = False
     st.session_state.user_id = None
     st.session_state.username = ""
+    st.cache_data.clear() 
     st.rerun()
 
 st.sidebar.write("---")
 
-# Finestre modali di conferma eliminazione
-@st.dialog("Conferma Eliminazione Contatto")
-def conferma_eliminazione_dialog(contatto_id, nome_completo):
-    st.warning(f"Sei sicuro di voler eliminare definitivamente **{nome_completo}**?")
-    col_conferma, col_annulla = st.columns(2)
-    with col_conferma:
-        if st.button("Sì, elimina", type="primary", use_container_width=True):
-            esegui_query("DELETE FROM contatti WHERE id = :id", {"id": int(contatto_id)})
-            st.success("Contatto eliminato!")
-            st.rerun()
-    with col_annulla:
-        if st.button("Annulla", use_container_width=True): st.rerun()
-
-@st.dialog("Conferma Eliminazione Attività")
-def conferma_eliminazione_attivita_dialog(attivita_id, descrizione_breve):
-    st.warning(f"Sei sicuro di voler eliminare l'attività: **\"{descrizione_breve}\"**?")
-    col_conferma, col_annulla = st.columns(2)
-    with col_conferma:
-        if st.button("Sì, elimina", type="primary", use_container_width=True):
-            esegui_query("DELETE FROM attivita WHERE id = :id", {"id": int(attivita_id)})
-            st.success("Attività eliminata!")
-            st.rerun()
-    with col_annulla:
-        if st.button("Annulla", use_container_width=True): st.rerun()
-
-# Navigazione
-st.sidebar.title("📁 Menu Principale")
-macro_sezione = st.sidebar.radio("Seleziona Area:", ["👥 Contatti", "📅 Attività"])
-st.sidebar.write("---")
-
-OPZIONI_PROVENIENZA = ["Social", "BNI", "Fiere/Eventi in presenza"]
-
-if macro_sezione == "👥 Contatti":
-    sotto_sezione = st.sidebar.radio("Scegli Azione:", ["ℹ️ Info e Gestione Contatto", "➕ Aggiungi Contatto"])
-else:
-    sotto_sezione = st.sidebar.radio("Scegli Azione:", ["🔍 Riepilogo Scadenze", "➕ Aggiungi Attività", "⚙️ Gestione Attività"])
-
-
-# ==# ==================== LOGICA SOTTOSEZIONI (CON TABELLA ED EDITOR) ====================
+# ==================== LOGICA SOTTOSEZIONI ====================
 
 # 1. INFO E GESTIONE CONTATTO
 if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione Contatto":
     st.header("👤 Elenco e Gestione Contatti")
+    st.session_state.messaggio_successo_contatto = None # Resetta eventuali messaggi stabili
     
-    # Caricamento dei dati in base al flag globale - Ordinati di default per Cognome (ORDER BY cognome ASC)
     if mostra_tutti:
         contatti_df = leggi_query("SELECT id, nome, cognome, ruolo, azienda, provenienza_lead, email, telefono, utente_id FROM contatti ORDER BY cognome ASC")
     else:
@@ -127,7 +144,6 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
     if not contatti_df.empty:
         st.write("💡 *Clicca sulla casella a sinistra di una riga per selezionare il contatto da modificare o eliminare.*")
         
-        # Prepariamo il DataFrame per la visualizzazione rinominando le colonne
         contatti_visualizzazione = contatti_df.copy()
         contatti_visualizzazione.columns = ["ID", "Nome", "Cognome", "Ruolo", "Azienda", "Provenienza", "Email", "Telefono", "Utente ID"]
         
@@ -135,18 +151,14 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
             contatti_visualizzazione,
             use_container_width=True,
             hide_index=True,
-            on_select="rerun",  # Ricarica la pagina appena l'utente seleziona una riga
-            selection_mode="single-row",  # Permette di selezionare un solo contatto alla volta
-            column_config={
-                "ID": None  # Nasconde completamente la colonna ID del contatto dalla vista degli utenti
-            }
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={"ID": None}
         )
         
-        # Controlliamo se l'utente ha selezionato una riga
         righe_selezionate = scelta_griglia.get("selection", {}).get("rows", [])
         
         if righe_selezionate:
-            # Recuperiamo l'indice della riga selezionata nel DataFrame originale
             indice_selezionato = righe_selezionate[0]
             info_contatto = contatti_df.iloc[indice_selezionato]
             contatto_id = info_contatto["id"]
@@ -155,7 +167,6 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
             st.write("---")
             st.subheader(f"⚙️ Azioni per: {nome_completo}")
             
-            # Layout con i pulsanti di gestione sotto la tabella
             col_btn1, col_btn2, _ = st.columns([1, 1, 4])
             
             with col_btn1:
@@ -164,7 +175,6 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
                 if st.button("🗑️ Elimina Contatto", type="primary", key=f"btn_del_{contatto_id}"):
                     conferma_eliminazione_dialog(contatto_id, nome_completo)
             
-            # Se la spunta di modifica è attiva, mostriamo il form precompilato
             if mostra_form_modifica:
                 tutti_utenti = leggi_query("SELECT id, username FROM utenti")
                 dict_utenti = dict(zip(tutti_utenti['username'], tutti_utenti['id']))
@@ -197,12 +207,12 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
                                 "UPDATE contatti SET nome=:n, cognome=:c, azienda=:a, email=:e, telefono=:t, ruolo=:r, provenienza_lead=:p, utente_id=:uid WHERE id=:id",
                                 {"n": nuovo_nome, "c": nuovo_cognome, "a": nuova_azienda, "e": nuova_email, "t": nuovo_telefono, "r": nuovo_ruolo, "p": nuova_provenienza, "uid": dict_utenti[nuovo_assegnato], "id": int(contatto_id)}
                             )
+                            st.cache_data.clear()
                             st.success("Contatto aggiornato con successo!")
                             st.rerun()
                         else:
                             st.error("I campi Nome e Cognome sono obbligatori.")
             
-            # Mostra lo storico delle attività del contatto selezionato in fondo
             st.write("---")
             st.write(f"### 📋 Storico Attività per {nome_completo}")
             attivita_df = leggi_query("SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC", {"cid": int(contatto_id)})
@@ -219,6 +229,11 @@ if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione
 # 2. AGGIUNGI CONTATTO
 elif macro_sezione == "👥 Contatti" and sotto_sezione == "➕ Aggiungi Contatto":
     st.header("Inserimento Nuovo Contatto")
+    
+    # Se esiste un messaggio di successo salvato in memoria, lo mostriamo in cima al form
+    if st.session_state.messaggio_successo_contatto:
+        st.success(st.session_state.messaggio_successo_contatto)
+        
     tutti_utenti = leggi_query("SELECT id, username FROM utenti")
     dict_utenti = dict(zip(tutti_utenti['username'], tutti_utenti['id']))
     
@@ -241,8 +256,12 @@ elif macro_sezione == "👥 Contatti" and sotto_sezione == "➕ Aggiungi Contatt
                     "INSERT INTO contatti (nome, cognome, azienda, email, telefono, ruolo, provenienza_lead, utente_id) VALUES (:nome, :cognome, :azienda, :email, :telefono, :ruolo, :prov, :uid)",
                     {"nome": nome, "cognome": cognome, "azienda": azienda, "email": email, "telefono": telefono, "ruolo": ruolo, "prov": provenienza, "uid": dict_utenti[assegna_a]}
                 )
+                st.cache_data.clear()
+                
+                # Salviamo il testo nel session state così "sopravvive" al rerun
+                st.session_state.messaggio_successo_contatto = f"✅ Contatto \"{nome} {cognome}\" aggiunto con successo!"
+                
                 st.session_state.contact_form_version += 1
-                st.success("Contatto salvato con successo!")
                 st.rerun()
             else:
                 st.error("I campi Nome e Cognome sono obbligatori.")
@@ -250,6 +269,8 @@ elif macro_sezione == "👥 Contatti" and sotto_sezione == "➕ Aggiungi Contatt
 # 3. RIEPILOGO SCADENZE ATTIVITÀ
 elif macro_sezione == "📅 Attività" and sotto_sezione == "🔍 Riepilogo Scadenze":
     st.header("Riepilogo Scadenze Attività")
+    st.session_state.messaggio_successo_attivita = None
+    
     oggi = datetime.today()
     tra_sette_giorni = oggi + timedelta(days=7)
     
@@ -282,6 +303,9 @@ elif macro_sezione == "📅 Attività" and sotto_sezione == "🔍 Riepilogo Scad
 elif macro_sezione == "📅 Attività" and sotto_sezione == "➕ Aggiungi Attività":
     st.header("Pianifica Nuova Attività")
     
+    if st.session_state.messaggio_successo_attivita:
+        st.success(st.session_state.messaggio_successo_attivita)
+        
     if mostra_tutti:
         contatti_df = leggi_query("SELECT id, nome, cognome, azienda FROM contatti")
     else:
@@ -300,8 +324,11 @@ elif macro_sezione == "📅 Attività" and sotto_sezione == "➕ Aggiungi Attivi
                     contatto_id = contatti_df[contatti_df["nominativo"] == contatto_scelto]["id"].values[0]
                     esegui_query("INSERT INTO attivita (contatto_id, descrizione, data_scadenza, stato) VALUES (:cid, :desc, :scad, :stato)",
                                  {"cid": int(contatto_id), "desc": descrizione, "scad": data_scadenza, "stato": stato})
+                    st.cache_data.clear()
+                    
+                    st.session_state.messaggio_successo_attivita = "✅ Nuova attività pianificata con successo!"
+                    
                     st.session_state.activity_form_version += 1
-                    st.success("Attività pianificata!")
                     st.rerun()
                 else:
                     st.error("La descrizione è obbligatoria.")
@@ -311,6 +338,7 @@ elif macro_sezione == "📅 Attività" and sotto_sezione == "➕ Aggiungi Attivi
 # 5. GESTIONE E MODIFICA ATTIVITÀ
 elif macro_sezione == "📅 Attività" and sotto_sezione == "⚙️ Gestione Attività":
     st.header("Gestione e Modifica Attività")
+    st.session_state.messaggio_successo_attivita = None
     
     if mostra_tutti:
         query_all_attivita = """
@@ -344,6 +372,7 @@ elif macro_sezione == "📅 Attività" and sotto_sezione == "⚙️ Gestione Att
                     if nuova_descrizione.strip():
                         esegui_query("UPDATE attivita SET descrizione=:desc, data_scadenza=:scad, stato=:stato WHERE id=:id",
                                      {"desc": nuova_descrizione, "scad": nuova_data, "stato": nuovo_stato, "id": int(id_att_selezionata)})
+                        st.cache_data.clear()
                         st.success("Attività aggiornata!")
                         st.rerun()
             
