@@ -4,7 +4,6 @@ from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 
 # CONFIGURAZIONE SUPABASE
-# Sostituisci questa stringa con l'URI copiato dalle impostazioni di Supabase
 DATABASE_URL="postgresql://postgres.ruwbodnfktfcppxfjkxq:MC.D0m0s3ns3@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
 
 # Connessione robusta al database PostgreSQL
@@ -62,23 +61,150 @@ def conferma_eliminazione_attivita_dialog(attivita_id, descrizione_breve):
         if st.button("Annulla", use_container_width=True):
             st.rerun()
 
-# Sidebar aggiornata a 5 voci
-menu = st.sidebar.radio(
-    "Navigazione", 
-    [
-        "Riepilogo Attività", 
-        "Info e Storico Contatti", 
-        "Gestione Attività", 
-        "Aggiungi Contatto", 
-        "Aggiungi Attività"
-    ]
-)
 
-# ==================== SEZIONE 1: RIEPILOGO ATTIVITÀ (FILTRATO) ====================
-if menu == "Riepilogo Attività":
+# ==================== STRUTTURA DI NAVIGAZIONE A DUE LIVELLI ====================
+st.sidebar.title("📁 Menu Principale")
+macro_sezione = st.sidebar.radio("Seleziona Area:", ["👥 Contatti", "📅 Attività"])
+
+st.sidebar.write("---")
+
+# Opzioni fisse per la provenienza dei lead
+OPZIONI_PROVENIENZA = ["Social", "BNI", "Fiere/Eventi in presenza"]
+
+if macro_sezione == "👥 Contatti":
+    st.sidebar.subheader("Sottosezioni Contatti")
+    sotto_sezione = st.sidebar.radio(
+        "Scegli Azione:", 
+        ["ℹ️ Info e Gestione Contatto", "➕ Aggiungi Contatto"]
+    )
+elif macro_sezione == "📅 Attività":
+    st.sidebar.subheader("Sottosezioni Attività")
+    sotto_sezione = st.sidebar.radio(
+        "Scegli Azione:", 
+        ["🔍 Riepilogo Scadenze", "➕ Aggiungi Attività", "⚙️ Gestione Attività"]
+    )
+
+
+# ==================== LOGICA DELLE SOTTOSEZIONI ====================
+
+# --- SOTTOSEZIONE: INFO E GESTIONE CONTATTO ---
+if macro_sezione == "👥 Contatti" and sotto_sezione == "ℹ️ Info e Gestione Contatto":
+    st.header("👤 Scheda e Storico Contatti")
+    
+    contatti_df = leggi_query("SELECT * FROM contatti")
+    
+    if not contatti_df.empty:
+        contatti_df["nominativo"] = contatti_df["nome"] + " " + contatti_df["cognome"] + " (" + contatti_df["azienda"].fillna("") + ")"
+        selezionato = st.selectbox("Seleziona un contatto per consultare la scheda:", contatti_df["nominativo"])
+        
+        if selezionato:
+            contatto_id = contatti_df[contatti_df["nominativo"] == selezionato]["id"].values[0]
+            info_contatto = contatti_df[contatti_df["id"] == contatto_id].iloc[0]
+            nome_completo = f"{info_contatto['nome']} {info_contatto['cognome']}"
+            
+            # Visualizzazione dati attuali (Inclusi Lavoro e Provenienza Lead)
+            st.info(f"""
+            **Dettagli Anagrafica Attuali:**
+            * **Nome e Cognome:** {info_contatto['nome']} {info_contatto['cognome']}
+            * **Ruolo / Lavoro:** {info_contatto['ruolo'] if pd.notna(info_contatto['ruolo']) and info_contatto['ruolo'] != '' else 'Non specificato'}
+            * **Azienda:** {info_contatto['azienda'] if pd.notna(info_contatto['azienda']) else 'Non specificata'}
+            * **Provenienza Lead:** {info_contatto['provenienza_lead'] if pd.notna(info_contatto['provenienza_lead']) else 'Non specificata'}
+            * **Email:** {info_contatto['email'] if pd.notna(info_contatto['email']) else 'Non specificata'}
+            * **Telefono:** {info_contatto['telefono'] if pd.notna(info_contatto['telefono']) else 'Non specificato'}
+            """)
+            
+            with st.expander("📝 Modifica dati anagrafici contatto"):
+                with st.form(f"modifica_contatto_{contatto_id}"):
+                    col_m1, col_m2 = st.columns(2)
+                    with col_m1:
+                        nuovo_nome = st.text_input("Nome *", value=info_contatto['nome'])
+                        nuovo_cognome = st.text_input("Cognome *", value=info_contatto['cognome'])
+                        nuovo_ruolo = st.text_input("Ruolo / Lavoro", value=info_contatto['ruolo'] if pd.notna(info_contatto['ruolo']) else "")
+                        nuova_azienda = st.text_input("Azienda", value=info_contatto['azienda'] if pd.notna(info_contatto['azienda']) else "")
+                    with col_m2:
+                        nuova_email = st.text_input("Email", value=info_contatto['email'] if pd.notna(info_contatto['email']) else "")
+                        nuovo_telefono = st.text_input("Telefono", value=info_contatto['telefono'] if pd.notna(info_contatto['telefono']) else "")
+                        
+                        # Calcolo indice provenienza attuale
+                        prov_attuale = info_contatto['provenienza_lead']
+                        idx_prov = OPZIONI_PROVENIENZA.index(prov_attuale) if prov_attuale in OPZIONI_PROVENIENZA else 0
+                        nuova_provenienza = st.selectbox("Provenienza Lead", OPZIONI_PROVENIENZA, index=idx_prov)
+                    
+                    submit_modifica = st.form_submit_button("Aggiorna Anagrafica")
+                    if submit_modifica:
+                        if nuovo_nome.strip() and nuovo_cognome.strip():
+                            query_update_contatto = """
+                            UPDATE contatti 
+                            SET nome = :nome, cognome = :cognome, azienda = :azienda, email = :email, telefono = :telefono, ruolo = :ruolo, provenienza_lead = :prov
+                            WHERE id = :id
+                            """
+                            esegui_query(query_update_contatto, {
+                                "nome": nuovo_nome, "cognome": nuovo_cognome, "azienda": nuova_azienda,
+                                "email": nuova_email, "telefono": nuovo_telefono, "ruolo": nuovo_ruolo,
+                                "prov": nuova_provenienza, "id": int(contatto_id)
+                            })
+                            st.success("Dati contatto aggiornati con successo!")
+                            st.rerun()
+                        else:
+                            st.error("I campi Nome e Cognome non possono essere vuoti.")
+            
+            if st.button("Elimina questo contatto", type="primary"):
+                conferma_eliminazione_dialog(contatto_id, nome_completo)
+
+            st.write("---")
+            st.write("### Storico Attività del Contatto")
+            
+            attivita_df = leggi_query(
+                "SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC",
+                params={"cid": int(contatto_id)}
+            )
+            if not attivita_df.empty:
+                attivita_df["Scadenza"] = pd.to_datetime(attivita_df["Scadenza"]).dt.strftime('%d/%m/%Y')
+                st.dataframe(attivita_df, use_container_width=True)
+            else:
+                st.info("Nessuna attività registrata per questo contatto.")
+    else:
+        st.info("Nessun contatto presente nel database. Seleziona 'Aggiungi Contatto' dal menu a sinistra per inserire il primo.")
+
+# --- SOTTOSEZIONE: AGGIUNGI CONTATTO ---
+elif macro_sezione == "👥 Contatti" and sotto_sezione == "➕ Aggiungi Contatto":
+    st.header("Inserimento Nuovo Contatto")
+    
+    with st.form(f"nuovo_contatto_{st.session_state.contact_form_version}"):
+        st.write("Compila i campi per salvare un nuovo contatto in anagrafica:")
+        col1, col2 = st.columns(2)
+        with col1:
+            nome = st.text_input("Nome *")
+            cognome = st.text_input("Cognome *")
+            ruolo = st.text_input("Ruolo / Lavoro")
+            azienda = st.text_input("Azienda")
+        with col2:
+            email = st.text_input("Email")
+            telefono = st.text_input("Telefono")
+            provenienza = st.selectbox("Provenienza Lead", OPZIONI_PROVENIENZA)
+        
+        submit = st.form_submit_button("Salva in Anagrafica")
+        if submit:
+            if nome.strip() and cognome.strip():
+                query_insert = """
+                INSERT INTO contatti (nome, cognome, azienda, email, telefono, ruolo, provenienza_lead) 
+                VALUES (:nome, :cognome, :azienda, :email, :telefono, :ruolo, :prov)
+                """
+                esegui_query(query_insert, {
+                    "nome": nome, "cognome": cognome, "azienda": azienda, 
+                    "email": email, "telefono": telefono, "ruolo": ruolo, "prov": provenienza
+                })
+                
+                st.session_state.contact_form_version += 1
+                st.success(f"Contatto **{nome} {cognome}** salvato con successo!")
+                st.rerun()
+            else:
+                st.error("I campi Nome e Cognome sono obbligatori.")
+
+# --- SOTTOSEZIONE: RIEPILOGO SCADENZE ATTIVITÀ ---
+elif macro_sezione == "📅 Attività" and sotto_sezione == "🔍 Riepilogo Scadenze":
     st.header("Riepilogo Scadenze Attività")
     
-    # Calcolo delle date predefinite
     oggi = datetime.today()
     tra_sette_giorni = oggi + timedelta(days=7)
     
@@ -105,61 +231,52 @@ if menu == "Riepilogo Attività":
     df_riepilogo = leggi_query(query, params={"inizio": data_inizio, "fine": data_fine})
     
     if not df_riepilogo.empty:
-        # Formattazione della data nella tabella in GG/MM/YYYY
         df_riepilogo["Data Scadenza"] = pd.to_datetime(df_riepilogo["Data Scadenza"]).dt.strftime('%d/%m/%Y')
-        
         st.write(f"Trovate {len(df_riepilogo)} attività nel periodo selezionato:")
         st.dataframe(df_riepilogo, use_container_width=True)
     else:
         st.info("Nessuna attività programmata in questo intervallo di date.")
 
-# ==================== SEZIONE 2: INFO E STORICO CONTATTI ====================
-elif menu == "Info e Storico Contatti":
-    st.header("👤 Scheda e Storico Contatti")
+# --- SOTTOSEZIONE: AGGIUNGI ATTIVITÀ ---
+elif macro_sezione == "📅 Attività" and sotto_sezione == "➕ Aggiungi Attività":
+    st.header("Pianifica Nuova Attività")
     
-    contatti_df = leggi_query("SELECT * FROM contatti")
+    contatti_df = leggi_query("SELECT id, nome, cognome, azienda FROM contatti")
     
     if not contatti_df.empty:
         contatti_df["nominativo"] = contatti_df["nome"] + " " + contatti_df["cognome"] + " (" + contatti_df["azienda"].fillna("") + ")"
-        selezionato = st.selectbox("Seleziona un contatto per consultare la scheda:", contatti_df["nominativo"])
         
-        if selezionato:
-            contatto_id = contatti_df[contatti_df["nominativo"] == selezionato]["id"].values[0]
-            info_contatto = contatti_df[contatti_df["id"] == contatto_id].iloc[0]
-            nome_completo = f"{info_contatto['nome']} {info_contatto['cognome']}"
+        with st.form(f"nuova_attivita_{st.session_state.activity_form_version}"):
+            contatto_scelto = st.selectbox("Associa a Contatto", contatti_df["nominativo"])
+            descrizione = st.text_area("Descrizione dell'attività da fare *")
+            data_scadenza = st.date_input("Data Scadenza", datetime.today(), format="DD/MM/YYYY")
+            stato = st.selectbox("Stato", ["Da fare", "In corso", "Completata"])
             
-            st.info(f"""
-            **Dettagli Anagrafica:**
-            * **Nome e Cognome:** {info_contatto['nome']} {info_contatto['cognome']}
-            * **Azienda:** {info_contatto['azienda'] if pd.notna(info_contatto['azienda']) else 'Non specificata'}
-            * **Email:** {info_contatto['email'] if pd.notna(info_contatto['email']) else 'Non specificata'}
-            * **Telefono:** {info_contatto['telefono'] if pd.notna(info_contatto['telefono']) else 'Non specificato'}
-            """)
-            
-            if st.button("Elimina questo contatto", type="primary"):
-                conferma_eliminazione_dialog(contatto_id, nome_completo)
-
-            st.write("---")
-            st.write("### Storico Attività del Contatto")
-            
-            attivita_df = leggi_query(
-                "SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC",
-                params={"cid": int(contatto_id)}
-            )
-            if not attivita_df.empty:
-                # Formattazione della data in GG/MM/YYYY
-                attivita_df["Scadenza"] = pd.to_datetime(attivita_df["Scadenza"]).dt.strftime('%d/%m/%Y')
-                st.dataframe(attivita_df, use_container_width=True)
-            else:
-                st.info("Nessuna attività registrata per questo contatto.")
+            submit_att = st.form_submit_button("Pianifica Attività")
+            if submit_att:
+                if descrizione.strip():
+                    contatto_id = contatti_df[contatti_df["nominativo"] == contatto_scelto]["id"].values[0]
+                    query_att = """
+                    INSERT INTO attivita (contatto_id, descrizione, data_scadenza, stato) 
+                    VALUES (:cid, :desc, :scad, :stato)
+                    """
+                    esegui_query(query_att, {
+                        "cid": int(contatto_id), "desc": descrizione, 
+                        "scad": data_scadenza, "stato": stato
+                    })
+                    
+                    st.session_state.activity_form_version += 1
+                    st.success("Attività pianificata con successo!")
+                    st.rerun()
+                else:
+                    st.error("La descrizione dell'attività è obbligatoria per procedere!")
     else:
-        st.info("Nessun contatto presente nel database. Vai alla sezione 'Aggiungi Contatto' per inserirne uno.")
+        st.warning("Devi prima inserire almeno un contatto prima di poter programmare un'attività!")
 
-# ==================== SEZIONE 3: GESTIONE ATTIVITÀ (MODIFICA / CANCELLAZIONE) ====================
-elif menu == "Gestione Attività":
+# --- SOTTOSEZIONE: GESTIONE E MODIFICA ATTIVITÀ ---
+elif macro_sezione == "📅 Attività" and sotto_sezione == "⚙️ Gestione Attività":
     st.header("Gestione e Modifica Attività")
     
-    # Recuperiamo tutte le attività associate ai rispettivi contatti
     query_all_attivita = """
     SELECT 
         a.id as attivita_id,
@@ -174,7 +291,6 @@ elif menu == "Gestione Attività":
     attivita_totali_df = leggi_query(query_all_attivita)
     
     if not attivita_totali_df.empty:
-        # Creiamo un'etichetta descrittiva per il selettore
         attivita_totali_df["label_scelta"] = (
             "[" + attivita_totali_df["stato"] + "] " + 
             attivita_totali_df["contatto_info"] + " - " + 
@@ -184,22 +300,18 @@ elif menu == "Gestione Attività":
         scelta_att = st.selectbox("Seleziona l'attività da modificare o eliminare:", attivita_totali_df["label_scelta"])
         
         if scelta_att:
-            # Estraiamo i dati dell'attività selezionata
             dati_att = attivita_totali_df[attivita_totali_df["label_scelta"] == scelta_att].iloc[0]
             id_att_selezionata = dati_att["attivita_id"]
             
             st.write("---")
             st.subheader("Modifica Dettagli")
             
-            # Form per la modifica dell'attività selezionata
             with st.form("modifica_attivita_form"):
                 st.write(f"**Assegnato a:** {dati_att['contatto_info']}")
-                
                 nuova_descrizione = st.text_area("Descrizione dell'attività *", value=dati_att["descrizione"])
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    # Converte la data in formato corretto per l'input date
                     data_attuale_att = pd.to_datetime(dati_att["data_scadenza"]).date()
                     nuova_data = st.date_input("Data Scadenza", data_attuale_att, format="DD/MM/YYYY")
                 with col2:
@@ -229,7 +341,6 @@ elif menu == "Gestione Attività":
                     else:
                         st.error("La descrizione dell'attività non può essere vuota!")
             
-            # Pulsante per eliminare l'attività al di fuori del form di modifica
             st.write("---")
             if st.button("Elimina definitivamente questa attività", type="primary"):
                 desc_breve = dati_att["descrizione"][:30] + "..." if len(dati_att["descrizione"]) > 30 else dati_att["descrizione"]
@@ -237,75 +348,3 @@ elif menu == "Gestione Attività":
                 
     else:
         st.info("Nessuna attività programmata nel sistema al momento.")
-
-# ==================== SEZIONE 4: AGGIUNGI CONTATTO ====================
-elif menu == "Aggiungi Contatto":
-    st.header("Inserimento Nuovo Contatto")
-    
-    with st.form(f"nuovo_contatto_{st.session_state.contact_form_version}"):
-        st.write("Compila i campi per salvare un nuovo contatto in anagrafica:")
-        col1, col2 = st.columns(2)
-        with col1:
-            nome = st.text_input("Nome *")
-            cognome = st.text_input("Cognome *")
-            azienda = st.text_input("Azienda")
-        with col2:
-            email = st.text_input("Email")
-            telefono = st.text_input("Telefono")
-        
-        submit = st.form_submit_button("Salva in Anagrafica")
-        if submit:
-            if nome.strip() and cognome.strip():
-                query_insert = """
-                INSERT INTO contatti (nome, cognome, azienda, email, telefono) 
-                VALUES (:nome, :cognome, :azienda, :email, :telefono)
-                """
-                esegui_query(query_insert, {
-                    "nome": nome, "cognome": cognome, "azienda": azienda, 
-                    "email": email, "telefono": telefono
-                })
-                
-                # PULIZIA CAMPI IN CASO DI SUCCESSO
-                st.session_state.contact_form_version += 1
-                st.success(f"Contatto **{nome} {cognome}** salvato con successo!")
-                st.rerun()
-                
-            else:
-                st.error("I campi Nome e Cognome sono obbligatori.")
-
-# ==================== SEZIONE 5: AGGIUNGI ATTIVITÀ ====================
-elif menu == "Aggiungi Attività":
-    st.header("Pianifica Nuova Attività")
-    
-    contatti_df = leggi_query("SELECT id, nome, cognome, azienda FROM contatti")
-    
-    if not contatti_df.empty:
-        contatti_df["nominativo"] = contatti_df["nome"] + " " + contatti_df["cognome"] + " (" + contatti_df["azienda"].fillna("") + ")"
-        
-        with st.form(f"nuova_attivita_{st.session_state.activity_form_version}"):
-            contatto_scelto = st.selectbox("Associa a Contatto", contatti_df["nominativo"])
-            descrizione = st.text_area("Descrizione dell'attività da fare *")
-            data_scadenza = st.date_input("Data Scadenza", datetime.today(), format="DD/MM/YYYY")
-            stato = st.selectbox("Stato", ["Da fare", "In corso", "Completata"])
-            
-            submit_att = st.form_submit_button("Pianifica Attività")
-            if submit_att:
-                if descrizione.strip():  # VERIFICA OBBLIGATORIETÀ DELLA DESCRIZIONE
-                    contatto_id = contatti_df[contatti_df["nominativo"] == contatto_scelto]["id"].values[0]
-                    query_att = """
-                    INSERT INTO attivita (contatto_id, descrizione, data_scadenza, stato) 
-                    VALUES (:cid, :desc, :scad, :stato)
-                    """
-                    esegui_query(query_att, {
-                        "cid": int(contatto_id), "desc": descrizione, 
-                        "scad": data_scadenza, "stato": stato
-                    })
-                    
-                    # PULIZIA CAMPI IN CASO DI SUCCESSO
-                    st.session_state.activity_form_version += 1
-                    st.success("Attività pianificata con successo!")
-                    st.rerun()
-                else:
-                    st.error("La descrizione dell'attività è obbligatoria per procedere!")
-    else:
-        st.warning("Devi prima inserire almeno un contatto prima di poter programmare un'attività!")
