@@ -4,11 +4,8 @@ import bcrypt
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 from st_keyup import st_keyup
-import extra_streamlit_components as stx
 from datetime import datetime, timedelta
 
-# Inizializzazione del gestore Cookie
-cookie_manager = stx.CookieManager()
 
 # CONFIGURAZIONE SUPABASE
 DATABASE_URL = st.secrets["DATABASE_URL"]
@@ -90,21 +87,20 @@ OPZIONI_PROVENIENZA = ["Social", "BNI", "Fiere/Eventi in presenza"]
 
 # ==================== SCHERMATA DI LOGIN & PERSISTENZA ====================
 
-# 1. Verifichiamo se esiste già un cookie salvato nel browser
-saved_user_id = cookie_manager.get(cookie="domosense_crm_uid")
-
-if saved_user_id and not st.session_state.logged_in:
+# 1. Verifichiamo se esiste un ID sessione negli URL Query Params
+if "session_uid" in st.query_params and not st.session_state.logged_in:
+    saved_uid = st.query_params["session_uid"]
     with engine.connect() as conn:
         user_df = pd.read_sql_query(
             text("SELECT id, username FROM utenti WHERE id = :uid"),
-            conn, params={"uid": int(saved_user_id)}
+            conn, params={"uid": int(saved_uid)}
         )
         if not user_df.empty:
             st.session_state.logged_in = True
             st.session_state.user_id = int(user_df.iloc[0]['id'])
             st.session_state.username = user_df.iloc[0]['username']
 
-# 2. Se l'utente non è loggato (e non ha cookie), mostra la form di Login
+# 2. Se l'utente non è loggato, mostra la form di Login
 if not st.session_state.logged_in:
     st.title("🔒 Domosense CRM - Accesso")
     
@@ -134,9 +130,8 @@ if not st.session_state.logged_in:
                     st.session_state.user_id = uid
                     st.session_state.username = user_df.iloc[0]['username']
                     
-                    # Salva il Cookie nel browser per 7 giorni
-                    scadenza_cookie = datetime.now() + timedelta(days=7)
-                    cookie_manager.set('domosense_crm_uid', str(uid), expires_at=scadenza_cookie)
+                    # Salva l'ID sessione nell'URL del browser
+                    st.query_params["session_uid"] = str(uid)
                     
                     st.success("Accesso effettuato!")
                     st.rerun()
@@ -184,8 +179,8 @@ if st.sidebar.button("Logout", type="secondary", use_container_width=True):
     st.session_state.user_id = None
     st.session_state.username = ""
     
-    # Cancella il Cookie di sessione dal browser
-    cookie_manager.delete('domosense_crm_uid')
+    # Cancella i parametri dall'URL
+    st.query_params.clear()
     
     st.cache_data.clear() 
     st.rerun()
