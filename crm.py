@@ -10,9 +10,15 @@ from datetime import datetime, timedelta
 # CONFIGURAZIONE SUPABASE
 DATABASE_URL = st.secrets["DATABASE_URL"]
 
+# SOSTITUISCI LA FUNZIONE ottieni_engine CON QUESTA:
 @st.cache_resource
 def ottieni_engine():
-    return create_engine(DATABASE_URL)
+    return create_engine(
+        DATABASE_URL, 
+        pool_size=10, 
+        max_overflow=20, 
+        pool_pre_ping=True
+    )
 
 engine = ottieni_engine()
 
@@ -48,11 +54,32 @@ def esegui_query(query, params=None):
         st.error(f"⚠️ Si è verificato un errore durante il salvataggio: {e}")
         return False
 
-# Lettura dati ottimizzata con Cache
 @st.cache_data(ttl=300)
 def leggi_query(query, params=None):
     with engine.connect() as conn:
         return pd.read_sql_query(text(query), conn, params=params or {})
+
+# --- NUOVA FUNZIONE IN CACHE PER GLI UTENTI ---
+@st.cache_data(ttl=600)
+def get_mappa_utenti():
+    tutti_utenti = leggi_query("SELECT id, username FROM utenti")
+    return dict(zip(tutti_utenti['username'], tutti_utenti['id']))
+
+# --- NUOVA FUNZIONE IN CACHE PER I KPI DELLA BARRA LATERALE ---
+@st.cache_data(ttl=60)
+def get_kpi_metrics(uid, mostra_tutti):
+    if mostra_tutti:
+        tot_c = leggi_query("SELECT COUNT(*) as tot FROM contatti").iloc[0]['tot']
+        tot_df = leggi_query("SELECT COUNT(*) as tot FROM attivita WHERE stato = 'Da fare'").iloc[0]['tot']
+    else:
+        tot_c = leggi_query("SELECT COUNT(*) as tot FROM contatti WHERE utente_id = :uid", {"uid": uid}).iloc[0]['tot']
+        tot_df = leggi_query("""
+            SELECT COUNT(*) as tot 
+            FROM attivita a 
+            JOIN contatti c ON a.contatto_id = c.id 
+            WHERE c.utente_id = :uid AND a.stato = 'Da fare'
+        """, {"uid": uid}).iloc[0]['tot']
+    return tot_c, tot_df
 
 # Finestre modali di conferma eliminazione
 @st.dialog("Conferma Eliminazione Contatto")
@@ -150,9 +177,17 @@ st.sidebar.title("📁 Menu Principale")
 st.sidebar.write(f"👤 Utente: **{st.session_state.username}**")
 mostra_tutti = st.sidebar.checkbox("👀 Mostra dati di tutti gli utenti", value=False)
 
-# --- NUOVE METRICHE KPI NELLA BARRA LATERALE ---
+# --- METRICHE KPI NELLA BARRA LATERALE IN CACHE ---
 st.sidebar.write("---")
 st.sidebar.subheader("📊 Metriche Rapide")
+
+# Richiama la funzione in cache (aggiorna i dati al massimo 1 volta al minuto)
+tot_contatti, tot_da_fare = get_kpi_metrics(st.session_state.user_id, mostra_tutti)
+
+with st.sidebar:
+    col_k1, col_k2 = st.columns(2)
+    col_k1.metric("👥 Contatti", tot_contatti)
+    col_k2.metric("📋 Da Fare", tot_da_fare)
 
 # Calcolo contatori dinamico in base alla spunta "mostra_tutti"
 if mostra_tutti:
@@ -167,11 +202,6 @@ else:
         WHERE c.utente_id = :uid AND a.stato = 'Da fare'
     """, {"uid": st.session_state.user_id}).iloc[0]['tot']
 
-col_kpi1, col_kpi2 = st.columns(2)
-with st.sidebar:
-    col_k1, col_k2 = st.columns(2)
-    col_k1.metric("👥 Contatti", tot_contatti)
-    col_k2.metric("📋 Da Fare", tot_da_fare)
 
 st.sidebar.write("---")
 if st.sidebar.button("Logout", type="secondary", use_container_width=True):
@@ -301,8 +331,8 @@ with tab_macro_contatti:
                         conferma_eliminazione_dialog(int(contatto_id), nome_completo)
                 
                 if mostra_form_modifica:
-                    tutti_utenti = leggi_query("SELECT id, username FROM utenti")
-                    dict_utenti = dict(zip(tutti_utenti['username'], tutti_utenti['id']))
+                    # DOPO:
+                    dict_utenti = get_mappa_utenti()
                     
                     with st.form(f"modifica_contatto_{contatto_id}"):
                         col_m1, col_m2 = st.columns(2)
@@ -357,8 +387,8 @@ with tab_macro_contatti:
         if st.session_state.messaggio_successo_contatto:
             st.success(st.session_state.messaggio_successo_contatto)
             
-        tutti_utenti = leggi_query("SELECT id, username FROM utenti")
-        dict_utenti = dict(zip(tutti_utenti['username'], tutti_utenti['id']))
+        # DOPO:
+        dict_utenti = get_mappa_utenti()
         
         with st.form(f"nuovo_contatto_{st.session_state.contact_form_version}"):
             col1, col2 = st.columns(2)
@@ -371,7 +401,11 @@ with tab_macro_contatti:
                 email = st.text_input("Email")
                 telefono = st.text_input("Telefono")
                 provenienza = st.selectbox("Provenienza Lead", OPZIONI_PROVENIENZA)
-                assegna_a = st.selectbox("Assegna a Utente", list(dict_utenti.keys()), index=list(dict_utenti.keys()).index(st.session_state.username))
+                # DOPO (Sicuro):
+                lista_nomi_utenti = list(dict_utenti.keys())
+                idx_default = lista_nomi_utenti.index(st.session_state.username) if (st.session_state.username in lista_nomi_utenti) else 0
+
+                assegna_a = st.selectbox("Assegna a Utente", lista_nomi_utenti, index=idx_default)
             
             if st.form_submit_button("Salva in Anagrafica"):
                 # 1. Verifica campi obbligatori Nome e Cognome
