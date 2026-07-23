@@ -4,6 +4,15 @@ import bcrypt
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 from st_keyup import st_keyup
+import extra_streamlit_components as stx
+from datetime import datetime, timedelta
+
+# Inizializzazione del gestore Cookie
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 # CONFIGURAZIONE SUPABASE
 DATABASE_URL = st.secrets["DATABASE_URL"]
@@ -83,7 +92,23 @@ def conferma_eliminazione_attivita_dialog(attivita_id, descrizione_breve):
 
 OPZIONI_PROVENIENZA = ["Social", "BNI", "Fiere/Eventi in presenza"]
 
-# ==================== SCHERMATA DI LOGIN ====================
+# ==================== SCHERMATA DI LOGIN & PERSISTENZA ====================
+
+# 1. Verifichiamo se esiste già un cookie salvato nel browser
+saved_user_id = cookie_manager.get(cookie="domosense_crm_uid")
+
+if saved_user_id and not st.session_state.logged_in:
+    with engine.connect() as conn:
+        user_df = pd.read_sql_query(
+            text("SELECT id, username FROM utenti WHERE id = :uid"),
+            conn, params={"uid": int(saved_user_id)}
+        )
+        if not user_df.empty:
+            st.session_state.logged_in = True
+            st.session_state.user_id = int(user_df.iloc[0]['id'])
+            st.session_state.username = user_df.iloc[0]['username']
+
+# 2. Se l'utente non è loggato (e non ha cookie), mostra la form di Login
 if not st.session_state.logged_in:
     st.title("🔒 Domosense CRM - Accesso")
     
@@ -94,14 +119,12 @@ if not st.session_state.logged_in:
         submit_login = st.form_submit_button("Accedi")
         
         if submit_login:
-            # 1. Recuperiamo l'utente e il suo hash dal DB
             with engine.connect() as conn:
                 user_df = pd.read_sql_query(
                     text("SELECT id, username, password FROM utenti WHERE username = :user"),
                     conn, params={"user": username_input.strip()}
                 )
             
-            # 2. Verifichiamo la password con bcrypt
             if not user_df.empty:
                 stored_hash = user_df.iloc[0]['password']
                 password_corretta = bcrypt.checkpw(
@@ -110,9 +133,15 @@ if not st.session_state.logged_in:
                 )
                 
                 if password_corretta:
+                    uid = int(user_df.iloc[0]['id'])
                     st.session_state.logged_in = True
-                    st.session_state.user_id = int(user_df.iloc[0]['id'])
+                    st.session_state.user_id = uid
                     st.session_state.username = user_df.iloc[0]['username']
+                    
+                    # Salva il Cookie nel browser per 7 giorni
+                    scadenza_cookie = datetime.now() + timedelta(days=7)
+                    cookie_manager.set('domosense_crm_uid', str(uid), expires_at=scadenza_cookie)
+                    
                     st.success("Accesso effettuato!")
                     st.rerun()
                 else:
@@ -158,6 +187,10 @@ if st.sidebar.button("Logout", type="secondary", use_container_width=True):
     st.session_state.logged_in = False
     st.session_state.user_id = None
     st.session_state.username = ""
+    
+    # Cancella il Cookie di sessione dal browser
+    cookie_manager.delete('domosense_crm_uid')
+    
     st.cache_data.clear() 
     st.rerun()
 
