@@ -8,11 +8,7 @@ import extra_streamlit_components as stx
 from datetime import datetime, timedelta
 
 # Inizializzazione del gestore Cookie
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+cookie_manager = stx.CookieManager()
 
 # CONFIGURAZIONE SUPABASE
 DATABASE_URL = st.secrets["DATABASE_URL"]
