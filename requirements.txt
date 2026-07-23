@@ -4,4 +4,4 @@ sqlalchemy
 psycopg2-binary
 bcrypt
 streamlit-keyup
-extra-streamlit-components
+
