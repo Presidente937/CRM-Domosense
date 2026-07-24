@@ -173,6 +173,9 @@ if not st.session_state.logged_in:
 # ==================== APPLICATIVO LOGGATO ====================
 
 # --- BARRA LATERALE: SOLO AZIONI GLOBALI E UTENTE ---
+# Nella barra laterale:
+st.sidebar.image("logo.png", use_container_width=True)
+
 st.sidebar.title("📁 Menu Principale")
 st.sidebar.write(f"👤 Utente: **{st.session_state.username}**")
 mostra_tutti = st.sidebar.checkbox("👀 Mostra dati di tutti gli utenti", value=False)
@@ -216,6 +219,13 @@ if st.sidebar.button("Logout", type="secondary", use_container_width=True):
     st.rerun()
 
 # ==================== AREA CENTRALE ULTRA-RAPIDA (TABS AD ALBERO) ====================
+# --- LOGO CENTRATO IN ALTO ---
+col_sinistra, col_logo, col_destra = st.columns([1, 2, 1])
+with col_logo:
+    st.image("logo.png", use_container_width=True)
+
+st.write("") # Spaziatore leggero
+
 st.title("Domosense CRM")
 
 # Primo livello di Tab: Macro-Aree (Il passaggio qui diventa istantaneo)
