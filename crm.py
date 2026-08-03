@@ -43,6 +43,14 @@ if "chiave_griglia_contatti" not in st.session_state:
     st.session_state.chiave_griglia_contatti = 0
 if "chiave_griglia_scadenze" not in st.session_state:  # <-- Aggiunto
     st.session_state.chiave_griglia_scadenze = 0
+if "avviso_scadute_mostrato" not in st.session_state:
+    st.session_state.avviso_scadute_mostrato = False
+if "chiave_griglia_overdue" not in st.session_state:
+    st.session_state.chiave_griglia_overdue = 0
+if "contatto_da_gestire" not in st.session_state:
+    st.session_state.contatto_da_gestire = None
+if "overdue_da_gestire" not in st.session_state:
+    st.session_state.overdue_da_gestire = None
 
 # Funzione per eseguire query di scrittura in sicurezza
 def esegui_query(query, params=None):
@@ -53,6 +61,12 @@ def esegui_query(query, params=None):
     except Exception as e:
         st.error(f"⚠️ Si è verificato un errore durante il salvataggio: {e}")
         return False
+
+# Funzioni di reset da passare ai dialog
+def reset_chiave_contatti():
+    st.session_state.chiave_griglia_contatti += 1
+def reset_chiave_overdue():
+    st.session_state.chiave_griglia_overdue += 1
 
 @st.cache_data(ttl=300)
 def leggi_query(query, params=None):
@@ -110,6 +124,109 @@ def conferma_eliminazione_attivita_dialog(attivita_id, descrizione_breve):
         if st.button("Annulla", use_container_width=True): 
             st.rerun()
 
+@st.dialog("🚨 Attività Scadute!")
+def conferma_scadute_dialog(num_scadute):
+    st.warning(f"Attenzione! Hai **{num_scadute}** attività scadute che richiedono la tua attenzione.")
+    if st.button("Gestisci Attività Scadute", type="primary", use_container_width=True):
+        st.session_state.avviso_scadute_mostrato = True
+        st.session_state.vai_a_scadute = True # <-- Attiva il reindirizzamento immediato
+        st.rerun()
+
+@st.dialog("⚙️ Gestione Attività Scaduta", on_dismiss=reset_chiave_overdue)
+def gestione_attivita_scaduta_dialog(id_att, riga_att, is_owner):
+    st.subheader(f"Contatto: {riga_att['Contatto']}")
+    if pd.notna(riga_att['Azienda']) and riga_att['Azienda']:
+        st.caption(f"Azienda: {riga_att['Azienda']}")
+    
+    if is_owner:
+        with st.form(f"dialog_form_modifica_overdue_{id_att}"):
+            nuova_desc = st.text_area("Descrizione *", value=riga_att["Attività"], key=f"dialog_desc_overdue_{id_att}")
+            nuova_data = st.date_input("Nuova Data Scadenza", datetime.today(), format="DD/MM/YYYY", key=f"dialog_date_overdue_{id_att}")
+            stati_possibili = ["Da fare", "In corso", "Completata"]
+            nuovo_stato = st.selectbox("Stato", stati_possibili, index=stati_possibili.index(riga_att["Stato"]), key=f"dialog_stato_overdue_{id_att}")
+            
+            if st.form_submit_button("💾 Salva Modifiche", use_container_width=True):
+                if nuova_desc.strip():
+                    esegui_query(
+                        "UPDATE attivita SET descrizione=:desc, data_scadenza=:scad, stato=:stato WHERE id=:id",
+                        {"desc": nuova_desc, "scad": nuova_data, "stato": nuovo_stato, "id": int(id_att)}
+                    )
+                    st.cache_data.clear()
+                    st.success("Attività aggiornata!")
+                    st.rerun()
+        
+        st.write("---")
+        if st.button("🗑️ Elimina definitivamente questa attività", type="primary", use_container_width=True, key=f"btn_modal_del_overdue_{id_att}"):
+            esegui_query("DELETE FROM attivita WHERE id = :id", {"id": int(id_att)})
+            st.cache_data.clear()
+            st.success("Attività eliminata!")
+            st.rerun()
+    else:
+        st.info(f"🔒 Questa attività è assegnata a **{riga_att['Assegnato a']}**. Puoi visualizzarla ma non puoi modificarla o eliminarla.")
+
+@st.dialog("⚙️ Gestione Contatto", on_dismiss=reset_chiave_contatti)
+def gestione_contatto_dialog(info_contatto):
+    contatto_id = info_contatto["ID"]
+    nome_completo = f"{info_contatto['Nome']} {info_contatto['Cognome']}"
+    
+    st.subheader(f"👤 {nome_completo}")
+    if pd.notna(info_contatto['Azienda']) and info_contatto['Azienda']:
+        st.caption(f"Azienda: {info_contatto['Azienda']}")
+    
+    dict_utenti = get_mappa_utenti()
+    
+    with st.form(f"dialog_modifica_contatto_{contatto_id}"):
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            nuovo_nome = st.text_input("Nome *", value=info_contatto['Nome'], key=f"dialog_nome_{contatto_id}")
+            nuovo_cognome = st.text_input("Cognome *", value=info_contatto['Cognome'], key=f"dialog_cognome_{contatto_id}")
+            nuovo_ruolo = st.text_input("Ruolo / Lavoro", value=info_contatto['Ruolo'] if pd.notna(info_contatto['Ruolo']) else "", key=f"dialog_ruolo_{contatto_id}")
+            nuova_azienda = st.text_input("Azienda", value=info_contatto['Azienda'] if pd.notna(info_contatto['Azienda']) else "", key=f"dialog_azienda_{contatto_id}")
+        with col_m2:
+            nuova_email = st.text_input("Email", value=info_contatto['Email'] if pd.notna(info_contatto['Email']) else "", key=f"dialog_email_{contatto_id}")
+            nuovo_telefono = st.text_input("Telefono", value=info_contatto['Telefono'] if pd.notna(info_contatto['Telefono']) else "", key=f"dialog_telefono_{contatto_id}")
+            nuova_provenienza = st.selectbox("Provenienza Lead", OPZIONI_PROVENIENZA, index=OPZIONI_PROVENIENZA.index(info_contatto['Provenienza']) if info_contatto['Provenienza'] in OPZIONI_PROVENIENZA else 0, key=f"dialog_prov_{contatto_id}")
+            
+            utente_corrente_nome = info_contatto['Assegnato a']
+            idx_ut = list(dict_utenti.keys()).index(utente_corrente_nome) if (pd.notna(utente_corrente_nome) and utente_corrente_nome in dict_utenti) else 0
+            nuovo_assegnato = st.selectbox("Assegnato a Utente", list(dict_utenti.keys()), index=idx_ut, key=f"dialog_ass_{contatto_id}")
+        
+        if st.form_submit_button("💾 Salva Modifiche Anagrafica", use_container_width=True):
+            if not (nuovo_nome.strip() and nuovo_cognome.strip()):
+                st.error("⚠️ Nome e Cognome non possono essere vuoti!")
+            elif nuova_email.strip() and ("@" not in nuova_email or "." not in nuova_email):
+                st.error("⚠️ Inserisci un indirizzo Email valido.")
+            elif nuovo_telefono.strip() and not any(char.isdigit() for char in nuovo_telefono):
+                st.error("⚠️ Il numero di Telefono non è valido.")
+            else:
+                esegui_query(
+                    "UPDATE contatti SET nome=:n, cognome=:c, azienda=:a, email=:e, telefono=:t, ruolo=:r, provenienza_lead=:p, utente_id=:uid WHERE id=:id",
+                    {"n": nuovo_nome.strip(), "c": nuovo_cognome.strip(), "a": nuova_azienda.strip(), "e": nuova_email.strip(), "t": nuovo_telefono.strip(), "r": nuovo_ruolo.strip(), "p": nuova_provenienza, "uid": dict_utenti[nuovo_assegnato], "id": int(contatto_id)}
+                )
+                st.cache_data.clear()
+                st.session_state.chiave_griglia_contatti += 1
+                st.success("Contatto aggiornato!")
+                st.rerun()
+
+    # STORICO ATTIVITÀ
+    st.write("---")
+    st.write("### 📋 Storico Attività del Contatto")
+    attivita_df = leggi_query("SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC", {"cid": int(contatto_id)})
+    if not attivita_df.empty:
+        attivita_df["Scadenza"] = pd.to_datetime(attivita_df["Scadenza"]).dt.strftime('%d/%m/%Y')
+        st.dataframe(attivita_df, use_container_width=True, hide_index=True)
+    else: 
+        st.info("Nessuna attività registrata per questo contatto.")
+
+    # PULSANTE ELIMINA CONTATTO
+    st.write("---")
+    if st.button("🗑️ Elimina Definitivamente questo Contatto", type="primary", use_container_width=True, key=f"btn_modal_del_contatto_{contatto_id}"):
+        esegui_query("DELETE FROM contatti WHERE id = :id", {"id": int(contatto_id)})
+        st.cache_data.clear()
+        st.session_state.chiave_griglia_contatti += 1
+        st.success("Contatto eliminato!")
+        st.rerun()
+
 OPZIONI_PROVENIENZA = ["Social", "BNI", "Fiere/Eventi in presenza"]
 
 # ==================== SCHERMATA DI LOGIN & PERSISTENZA ====================
@@ -144,12 +261,34 @@ if not st.session_state.logged_in:
                     conn, params={"user": username_input.strip()}
                 )
             
+                        # 2. Verifichiamo se l'utente esiste
             if not user_df.empty:
-                stored_hash = user_df.iloc[0]['password']
-                password_corretta = bcrypt.checkpw(
-                    password_input.strip().encode('utf-8'), 
-                    stored_hash.encode('utf-8')
-                )
+                stored_hash = str(user_df.iloc[0]['password'])
+                
+                # Se la password nel DB è già un hash bcrypt valido
+                if stored_hash.startswith('$2b$') or stored_hash.startswith('$2a$'):
+                    try:
+                        password_corretta = bcrypt.checkpw(
+                            password_input.strip().encode('utf-8'), 
+                            stored_hash.encode('utf-8')
+                        )
+                    except ValueError:
+                        password_corretta = False
+                else:
+                    # Se l'utente è stato creato a mano su Supabase in testo chiaro
+                    password_corretta = (password_input.strip() == stored_hash.strip())
+                    
+                    # Se la password è corretta, convertila SUBITO in hash bcrypt nel DB!
+                    if password_corretta:
+                        nuovo_hash = bcrypt.hashpw(
+                            password_input.strip().encode('utf-8'), 
+                            bcrypt.gensalt()
+                        ).decode('utf-8')
+                        
+                        esegui_query(
+                            "UPDATE utenti SET password = :h WHERE id = :uid",
+                            {"h": nuovo_hash, "uid": int(user_df.iloc[0]['id'])}
+                        )
                 
                 if password_corretta:
                     uid = int(user_df.iloc[0]['id'])
@@ -169,8 +308,19 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==================== APPLICATIVO LOGGATO ====================
+# --- CONTROLLO AUTOMATICO ATTIVITÀ SCADUTE AL LOGIN ---
+if st.session_state.logged_in and not st.session_state.avviso_scadute_mostrato:
+    query_check_scadute = """
+        SELECT COUNT(*) as tot
+        FROM attivita a
+        JOIN contatti c ON a.contatto_id = c.id
+        WHERE c.utente_id = :uid AND a.data_scadenza < CURRENT_DATE AND a.stato != 'Completata'
+    """
+    tot_scadute_utente = leggi_query(query_check_scadute, {"uid": st.session_state.user_id}).iloc[0]['tot']
+    
+    if tot_scadute_utente > 0:
+        conferma_scadute_dialog(tot_scadute_utente)
 
-# ==================== APPLICATIVO LOGGATO ====================
 
 # --- BARRA LATERALE: SOLO AZIONI GLOBALI E UTENTE ---
 # Nella barra laterale:
@@ -208,14 +358,18 @@ else:
 
 st.sidebar.write("---")
 if st.sidebar.button("Logout", type="secondary", use_container_width=True):
+    # Reset delle variabili utente
     st.session_state.logged_in = False
     st.session_state.user_id = None
     st.session_state.username = ""
     
-    # Cancella i parametri dall'URL
-    st.query_params.clear()
+    # Reset della flag del popup attività scadute
+    st.session_state.avviso_scadute_mostrato = False
     
+    # Cancella i parametri di sessione dall'URL e la cache
+    st.query_params.clear()
     st.cache_data.clear() 
+    
     st.rerun()
 
 # ==================== AREA CENTRALE ULTRA-RAPIDA (TABS AD ALBERO) ====================
@@ -228,6 +382,71 @@ st.write("") # Spaziatore leggero
 
 st.title("Domosense CRM")
 
+# --- VISTA PRIORITARIA REINDIRIZZAMENTO ATTIVITÀ SCADUTE ---
+if st.session_state.get("vai_a_scadute", False):
+    st.error("🚨 **GESTIONE ATTIVITÀ SCADUTE IN PRIMO PIANO**")
+    
+    if st.button("✖️ Chiudi e Torna alla Vista Standard", type="secondary"):
+        st.session_state.vai_a_scadute = False
+        st.rerun()
+        
+    st.write("---")
+    
+    # Query per caricare le attività scadute
+    if mostra_tutti:
+        query_overdue = """
+            SELECT a.id as attivita_id, u.username as "Assegnato a", c.nome || ' ' || c.cognome as "Contatto", c.azienda as "Azienda", 
+                   a.descrizione as "Attività", a.data_scadenza as "Data Scadenza", a.stato as "Stato", c.utente_id
+            FROM attivita a 
+            JOIN contatti c ON a.contatto_id = c.id
+            LEFT JOIN utenti u ON c.utente_id = u.id
+            WHERE a.data_scadenza < CURRENT_DATE AND a.stato != 'Completata'
+            ORDER BY a.data_scadenza ASC
+        """
+        df_overdue = leggi_query(query_overdue)
+    else:
+        query_overdue = """
+            SELECT a.id as attivita_id, u.username as "Assegnato a", c.nome || ' ' || c.cognome as "Contatto", c.azienda as "Azienda", 
+                   a.descrizione as "Attività", a.data_scadenza as "Data Scadenza", a.stato as "Stato", c.utente_id
+            FROM attivita a 
+            JOIN contatti c ON a.contatto_id = c.id
+            LEFT JOIN utenti u ON c.utente_id = u.id
+            WHERE c.utente_id = :uid AND a.data_scadenza < CURRENT_DATE AND a.stato != 'Completata'
+            ORDER BY a.data_scadenza ASC
+        """
+        df_overdue = leggi_query(query_overdue, {"uid": st.session_state.user_id})
+
+    if not df_overdue.empty:
+        df_vis_overdue = df_overdue.copy().reset_index(drop=True)
+        df_vis_overdue["Data Scadenza"] = pd.to_datetime(df_vis_overdue["Data Scadenza"]).dt.strftime('%d/%m/%Y')
+        
+        st.write("👇 **Clicca su una qualsiasi riga della tabella per aprire la finestra di modifica/eliminazione:**")
+        
+        scelta_overdue = st.dataframe(
+            df_vis_overdue[["Assegnato a", "Contatto", "Azienda", "Attività", "Data Scadenza", "Stato"]],
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"griglia_overdue_direct_{st.session_state.chiave_griglia_overdue}"
+        )
+        
+        righe_selezionate = scelta_overdue.get("selection", {}).get("rows", [])
+        
+        # QUANDO L'UTENTE CLICCA UNA RIGA DELLE ATTIVITÀ SCADUTE IN PRIMO PIANO:
+        if righe_selezionate and righe_selezionate[0] < len(df_vis_overdue):
+            riga_att = df_vis_overdue.iloc[righe_selezionate[0]]
+            id_att = riga_att["attivita_id"]
+            owner_uid = riga_att["utente_id"]
+            is_owner = pd.notna(owner_uid) and int(owner_uid) == int(st.session_state.user_id)
+            with st.spinner("⏳ Apertura attività..."):
+                gestione_attivita_scaduta_dialog(id_att, riga_att, is_owner)
+    else:
+        st.success("🎉 Nessuna attività scaduta! Ottimo lavoro.")
+    
+    st.write("---")
+    st.stop()
+
 # Primo livello di Tab: Macro-Aree (Il passaggio qui diventa istantaneo)
 tab_macro_contatti, tab_macro_attivita = st.tabs(["👥 Sezione Contatti", "📅 Sezione Attività"])
 
@@ -236,7 +455,6 @@ with tab_macro_contatti:
     # Secondo livello di Tab: Sottomenu interni
     sotto_tab_info, sotto_tab_add_c = st.tabs(["ℹ️ Info e Gestione Contatto", "➕ Aggiungi Contatto"])
     
-    # --- SOTTOMENU: INFO E GESTIONE CONTATTO ---
         # --- SOTTOMENU: INFO E GESTIONE CONTATTO ---
     with sotto_tab_info:
         if mostra_tutti:
@@ -258,27 +476,27 @@ with tab_macro_contatti:
             contatti_df = leggi_query(query_contatti, {"uid": st.session_state.user_id})
 
         if not contatti_df.empty:
-            # --- BARRA DI RICERCA ED ESPORTAZIONE AFFIANCATE ---
+            # Barra Ricerca, Reset ed Esporta CSV
             col_ricerca, col_reset, col_export = st.columns([3, 1, 1])
             
             with col_ricerca:
                 cerca_termine = st_keyup(
-                    "🔍 Cerca contatto (Nome, Cognome o Azienda)", 
+                    "🔍 Cerca contatto (Tempo Reale)", 
                     value="", 
-                    key=f"cerca_contatto_input_{st.session_state.chiave_griglia_contatti}",
-                    debounce=200
+                    debounce=150,
+                    key=f"cerca_contatto_live_{st.session_state.chiave_griglia_contatti}"
                 ).strip()
             
             with col_reset:
-                st.write("") # Spaziatori per allineare il pulsante in basso
+                st.write("")
                 st.write("")
                 if st.button("🔄 Reset", use_container_width=True, key="btn_reset_contatti"):
                     st.session_state.chiave_griglia_contatti += 1
                     st.rerun()
             
             with col_export:
-                st.write("") 
-                st.write("") 
+                st.write("")
+                st.write("")
                 csv_data = contatti_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Esporta CSV",
@@ -288,22 +506,21 @@ with tab_macro_contatti:
                     use_container_width=True
                 )
             
-            contatti_visualizzazione = contatti_df.copy()
+            contatti_visualizzazione = contatti_df.copy().reset_index(drop=True)
             contatti_visualizzazione.columns = ["ID", "Nome", "Cognome", "Ruolo", "Azienda", "Provenienza", "Email", "Telefono", "Assegnato a"]
             
-            # Applica il filtro se l'utente scrive qualcosa
             if cerca_termine:
                 maschera_ricerca = (
                     contatti_visualizzazione["Nome"].str.contains(cerca_termine, case=False, na=False) |
                     contatti_visualizzazione["Cognome"].str.contains(cerca_termine, case=False, na=False) |
                     contatti_visualizzazione["Azienda"].str.contains(cerca_termine, case=False, na=False)
                 )
-                contatti_visualizzazione = contatti_visualizzazione[maschera_ricerca]
+                contatti_visualizzazione = contatti_visualizzazione[maschera_ricerca].reset_index(drop=True)
             
-            # Ordinamento alfabetico di default per Cognome, poi Nome
-            contatti_visualizzazione = contatti_visualizzazione.sort_values(by=["Cognome", "Nome"], ascending=True)
+            contatti_visualizzazione = contatti_visualizzazione.sort_values(by=["Cognome", "Nome"], ascending=True).reset_index(drop=True)
             
-            # Griglia con chiave dinamica
+            st.write("👇 **Clicca su una qualsiasi riga della tabella per aprire la scheda del contatto:**")
+            
             scelta_griglia = st.dataframe(
                 contatti_visualizzazione,
                 use_container_width=True,
@@ -314,81 +531,14 @@ with tab_macro_contatti:
                 key=f"griglia_contatti_main_{st.session_state.chiave_griglia_contatti}"
             )
             
-            
             righe_selezionate = scelta_griglia.get("selection", {}).get("rows", [])
             
-            if righe_selezionate:
-                indice_selezionato = righe_selezionate[0]
-                
-                # Controllo di sicurezza: verifichiamo che l'indice esista nel DataFrame filtrato
-                if indice_selezionato < len(contatti_visualizzazione):
-                    info_contatto = contatti_visualizzazione.iloc[indice_selezionato]
-                else:
-                    # Se l'indice è fuori dai limiti (es. causa ricerca), resettiamo la griglia in sicurezza
-                    st.session_state.chiave_griglia_contatti += 1
-                    st.rerun()
-                contatto_id = info_contatto["ID"]
-                nome_completo = f"{info_contatto['Nome']} {info_contatto['Cognome']}"
-                
-                st.write("---")
-                st.subheader(f"⚙️ Gestione di: {nome_completo}")
-                
-                col_btn1, col_btn2, _ = st.columns([1.5, 1.5, 4])
-                with col_btn1:
-                    mostra_form_modifica = st.checkbox("📝 Modifica Anagrafica", value=False, key=f"check_mod_{contatto_id}")
-                with col_btn2:
-                    if st.button("🗑️ Elimina Contatto", type="primary", key=f"btn_del_{contatto_id}"):
-                        conferma_eliminazione_dialog(int(contatto_id), nome_completo)
-                
-                if mostra_form_modifica:
-                    # DOPO:
-                    dict_utenti = get_mappa_utenti()
-                    
-                    with st.form(f"modifica_contatto_{contatto_id}"):
-                        col_m1, col_m2 = st.columns(2)
-                        with col_m1:
-                            nuovo_nome = st.text_input("Nome *", value=info_contatto['Nome'])
-                            nuovo_cognome = st.text_input("Cognome *", value=info_contatto['Cognome'])
-                            nuovo_ruolo = st.text_input("Ruolo / Lavoro", value=info_contatto['Ruolo'] if pd.notna(info_contatto['Ruolo']) else "")
-                            nuova_azienda = st.text_input("Azienda", value=info_contatto['Azienda'] if pd.notna(info_contatto['Azienda']) else "")
-                        with col_m2:
-                            nuova_email = st.text_input("Email", value=info_contatto['Email'] if pd.notna(info_contatto['Email']) else "")
-                            nuovo_telefono = st.text_input("Telefono", value=info_contatto['Telefono'] if pd.notna(info_contatto['Telefono']) else "")
-                            nuova_provenienza = st.selectbox("Provenienza Lead", OPZIONI_PROVENIENZA, index=OPZIONI_PROVENIENZA.index(info_contatto['Provenienza']) if info_contatto['Provenienza'] in OPZIONI_PROVENIENZA else 0)
-                            
-                            utente_corrente_nome = info_contatto['Assegnato a']
-                            idx_ut = list(dict_utenti.keys()).index(utente_corrente_nome) if (pd.notna(utente_corrente_nome) and utente_corrente_nome in dict_utenti) else 0
-                            nuovo_assegnato = st.selectbox("Assegnato a Utente", list(dict_utenti.keys()), index=idx_ut)
-                        
-                        if st.form_submit_button("Salva Modifiche"):
-                            # 1. Verifica campi obbligatori Nome e Cognome
-                            if not (nuovo_nome.strip() and nuovo_cognome.strip()):
-                                st.error("⚠️ Nome e Cognome non possono essere vuoti!")
-                            # 2. Validazione formato Email (se compilata)
-                            elif nuova_email.strip() and ("@" not in nuova_email or "." not in nuova_email):
-                                st.error("⚠️ Inserisci un indirizzo Email valido (es. nome@dominio.it).")
-                            # 3. Validazione Telefono (se compilato)
-                            elif nuovo_telefono.strip() and not any(char.isdigit() for char in nuovo_telefono):
-                                st.error("⚠️ Il numero di Telefono inserito non sembra valido.")
-                            else:
-                                # Se tutti i controlli passano, esegui l'aggiornamento
-                                esegui_query(
-                                    "UPDATE contatti SET nome=:n, cognome=:c, azienda=:a, email=:e, telefono=:t, ruolo=:r, provenienza_lead=:p, utente_id=:uid WHERE id=:id",
-                                    {"n": nuovo_nome.strip(), "c": nuovo_cognome.strip(), "a": nuova_azienda.strip(), "e": nuova_email.strip(), "t": nuovo_telefono.strip(), "r": nuovo_ruolo.strip(), "p": nuova_provenienza, "uid": dict_utenti[nuovo_assegnato], "id": int(contatto_id)}
-                                )
-                                st.cache_data.clear()
-                                st.session_state.chiave_griglia_contatti += 1
-                                st.success("Contatto aggiornato!")
-                                st.rerun()
-                
-                st.write("---")
-                st.write("### 📋 Storico Rapido Attività")
-                attivita_df = leggi_query("SELECT descrizione as \"Attività\", data_scadenza as \"Scadenza\", stato as \"Stato\" FROM attivita WHERE contatto_id = :cid ORDER BY data_scadenza DESC", {"cid": int(contatto_id)})
-                if not attivita_df.empty:
-                    attivita_df["Scadenza"] = pd.to_datetime(attivita_df["Scadenza"]).dt.strftime('%d/%m/%Y')
-                    st.dataframe(attivita_df, use_container_width=True)
-                else: 
-                    st.info("Nessuna attività registrata per questo contatto.")
+            
+            # SOSTITUISCI IL FINALE DEL TAB CONTATTI CON QUESTO (Niente st.rerun):
+            if righe_selezionate and righe_selezionate[0] < len(contatti_visualizzazione):
+                info_contatto = contatti_visualizzazione.iloc[righe_selezionate[0]]
+                with st.spinner("⏳ Apertura scheda contatto..."):
+                    gestione_contatto_dialog(info_contatto)
         else: 
             st.info("Nessun contatto trovato.")
 
@@ -440,8 +590,69 @@ with tab_macro_contatti:
 
 # ==================== 2. MACRO TAB: ATTIVITÀ ====================
 with tab_macro_attivita:
-    # Secondo livello di Tab per le attività (Rinominata la prima scheda)
-    sotto_tab_scad, sotto_tab_add_a, sotto_tab_gest_a = st.tabs(["🔍 Riepilogo Scadenze Attività", "➕ Aggiungi Attività", "⚙️ Gestione Attività"])
+    # Aggiunto il primo tab dedicato alle attività scadute
+    sotto_tab_overdue, sotto_tab_scad, sotto_tab_add_a, sotto_tab_gest_a = st.tabs([
+        "🚨 Attività Scadute", 
+        "🔍 Riepilogo Scadenze Attività", 
+        "➕ Aggiungi Attività", 
+        "⚙️ Gestione Attività"
+    ])
+    
+        # --- SOTTOMENU: ATTIVITÀ SCADUTE ---
+    with sotto_tab_overdue:
+        if mostra_tutti:
+            query_overdue = """
+                SELECT a.id as attivita_id, u.username as "Assegnato a", c.nome || ' ' || c.cognome as "Contatto", c.azienda as "Azienda", 
+                       a.descrizione as "Attività", a.data_scadenza as "Data Scadenza", a.stato as "Stato", c.utente_id
+                FROM attivita a 
+                JOIN contatti c ON a.contatto_id = c.id
+                LEFT JOIN utenti u ON c.utente_id = u.id
+                WHERE a.data_scadenza < CURRENT_DATE AND a.stato != 'Completata'
+                ORDER BY a.data_scadenza ASC
+            """
+            df_overdue = leggi_query(query_overdue)
+        else:
+            query_overdue = """
+                SELECT a.id as attivita_id, u.username as "Assegnato a", c.nome || ' ' || c.cognome as "Contatto", c.azienda as "Azienda", 
+                       a.descrizione as "Attività", a.data_scadenza as "Data Scadenza", a.stato as "Stato", c.utente_id
+                FROM attivita a 
+                JOIN contatti c ON a.contatto_id = c.id
+                LEFT JOIN utenti u ON c.utente_id = u.id
+                WHERE c.utente_id = :uid AND a.data_scadenza < CURRENT_DATE AND a.stato != 'Completata'
+                ORDER BY a.data_scadenza ASC
+            """
+            df_overdue = leggi_query(query_overdue, {"uid": st.session_state.user_id})
+
+        if not df_overdue.empty:
+            st.error(f"⚠️ Trovate **{len(df_overdue)}** attività scadute non completate!")
+            
+            df_vis_overdue = df_overdue.copy().reset_index(drop=True)
+            df_vis_overdue["Data Scadenza"] = pd.to_datetime(df_vis_overdue["Data Scadenza"]).dt.strftime('%d/%m/%Y')
+            
+            st.write("👇 **Clicca su una qualsiasi riga della tabella per aprire la finestra di gestione:**")
+            
+            scelta_overdue = st.dataframe(
+                df_vis_overdue[["Assegnato a", "Contatto", "Azienda", "Attività", "Data Scadenza", "Stato"]],
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"griglia_overdue_tab_{st.session_state.chiave_griglia_overdue}"
+            )
+            
+            righe_sel = scelta_overdue.get("selection", {}).get("rows", [])
+            
+            # SOSTITUISCI IL FINALE DEL SUB-TAB OVERDUE CON QUESTO (Niente st.rerun):
+            if righe_sel and righe_sel[0] < len(df_vis_overdue):
+                riga_att = df_vis_overdue.iloc[righe_sel[0]]
+                id_att = riga_att["attivita_id"]
+                owner_uid = riga_att["utente_id"]
+                is_owner = pd.notna(owner_uid) and int(owner_uid) == int(st.session_state.user_id)
+                
+                with st.spinner("⏳ Apertura attività..."):
+                    gestione_attivita_scaduta_dialog(id_att, riga_att, is_owner)
+        else:
+            st.success("🎉 Nessuna attività scaduta! Ottimo lavoro.")
     
     # --- SOTTOMENU: RIEPILOGO SCADENZE ATTIVITÀ ---
     with sotto_tab_scad:
