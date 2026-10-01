@@ -2,6 +2,9 @@ streamlit
 pandas
 sqlalchemy
 psycopg2-binary
+psycopg[binary]
 bcrypt
 streamlit-keyup
+extra-streamlit-components
+
 
