@@ -10,6 +10,10 @@ from datetime import datetime, timedelta
 # CONFIGURAZIONE SUPABASE
 DATABASE_URL = st.secrets["DATABASE_URL"]
 
+# Forziamo l'uso del driver psycopg2
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 # SOSTITUISCI LA FUNZIONE ottieni_engine CON QUESTA:
 @st.cache_resource
 def ottieni_engine():
@@ -383,6 +387,7 @@ st.write("") # Spaziatore leggero
 st.title("Domosense CRM")
 
 # --- VISTA PRIORITARIA REINDIRIZZAMENTO ATTIVITÀ SCADUTE ---
+# --- VISTA PRIORITARIA REINDIRIZZAMENTO ATTIVITÀ SCADUTE ---
 if st.session_state.get("vai_a_scadute", False):
     st.error("🚨 **GESTIONE ATTIVITÀ SCADUTE IN PRIMO PIANO**")
     
@@ -433,12 +438,13 @@ if st.session_state.get("vai_a_scadute", False):
         
         righe_selezionate = scelta_overdue.get("selection", {}).get("rows", [])
         
-        # QUANDO L'UTENTE CLICCA UNA RIGA DELLE ATTIVITÀ SCADUTE IN PRIMO PIANO:
+        # --- QUI C'È LO SPINNER CON L'APERTURA DEL DIALOG ---
         if righe_selezionate and righe_selezionate[0] < len(df_vis_overdue):
             riga_att = df_vis_overdue.iloc[righe_selezionate[0]]
             id_att = riga_att["attivita_id"]
             owner_uid = riga_att["utente_id"]
             is_owner = pd.notna(owner_uid) and int(owner_uid) == int(st.session_state.user_id)
+            
             with st.spinner("⏳ Apertura attività..."):
                 gestione_attivita_scaduta_dialog(id_att, riga_att, is_owner)
     else:
